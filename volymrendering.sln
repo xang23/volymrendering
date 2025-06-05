@@ -1,0 +1,23 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35931.197 d17.13
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "volymrendering", "volymrendering\volymrendering.pyproj", "{314161AC-BEFE-428C-AF17-4B7EF48BBFF1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{314161AC-BEFE-428C-AF17-4B7EF48BBFF1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{314161AC-BEFE-428C-AF17-4B7EF48BBFF1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {7D2B8473-8CB0-4624-9895-798CEFD7D6FB}
+	EndGlobalSection
+EndGlobal
