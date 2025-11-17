@@ -313,3 +313,11 @@ class UnifiedTFCanvas(BaseTransferFunction):
                 final_opacity = max(final_opacity, widget_opacity)
                 
         return min(1.0, final_opacity)  # Clamp to [0,1]
+
+    # In UnifiedTFCanvas class
+    def reset_view(self):
+        """Reset the view to default"""
+        self._reset_view_requested = True
+        self._cached_xlim = (0.0, 255.0)
+        self._cached_ylim = (0.0, 255.0) if self.tf_type == '2d' else (0.0, 1.0)
+        self._draw()

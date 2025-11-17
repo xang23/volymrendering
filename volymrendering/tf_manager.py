@@ -176,7 +176,7 @@ class TFManager:
             hist, bins = np.histogram(scalar_data, bins=256, range=(0, 255))
             bin_centers = 0.5 * (bins[:-1] + bins[1:])
             peaks = np.where(hist > hist.max() * 0.05)[0]
-            
+            print("rhj")
             if len(peaks) < 2:
                 points_x = [0.0, 255.0]
                 points_y = [0.0, 1.0]
@@ -184,6 +184,7 @@ class TFManager:
             else:
                 points_x = list(bin_centers[peaks])
                 points_y = list(np.clip(hist[peaks] / hist.max(), 0.0, 1.0))
+                print(f"Default TF points_y: {points_y}")
                 colors = [(1.0, 1.0, 1.0) for _ in points_x]
             
             print(f"Created default TF with {len(points_x)} points")
