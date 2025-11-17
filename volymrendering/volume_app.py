@@ -103,8 +103,9 @@ class VolumeApp(QtWidgets.QMainWindow):
             
         self.vtkWidget.GetRenderWindow().Render()
         
+    # In VolumeApp - replace the current canvas setup
     def setup_ui(self):
-        """Setup the main user interface."""
+        """Setup the main user interface with dual view"""
         self.frame = QtWidgets.QFrame()
         vlay = QtWidgets.QVBoxLayout(self.frame)
 
@@ -118,23 +119,55 @@ class VolumeApp(QtWidgets.QMainWindow):
         toolbar = self.create_toolbar()
         vlay.addLayout(toolbar)
 
-        # Add mode toggle
-        mode_layout = QtWidgets.QHBoxLayout()
-        self.tf_mode_toggle = QtWidgets.QPushButton("Switch to Widget Mode")
-        self.tf_mode_toggle.setCheckable(True)
-        self.tf_mode_toggle.toggled.connect(self.toggle_tf_mode)
-        mode_layout.addWidget(self.tf_mode_toggle)
-        vlay.addLayout(mode_layout)
-
-        # Canvas container
-        self.canvas_container = QtWidgets.QStackedWidget()
-        vlay.addWidget(self.canvas_container)
-
-        # View toggle (initially visible for traditional mode)
-        self.view_toggle = QtWidgets.QPushButton('Switch to 2D TF')
-        self.view_toggle.setCheckable(True)
-        self.view_toggle.toggled.connect(self.toggle_tf_view)
-        vlay.addWidget(self.view_toggle)
+        # DUAL VIEW CONTAINER
+        dual_view_container = QtWidgets.QHBoxLayout()
+    
+        # Left side: Point-based TF
+        left_panel = QtWidgets.QVBoxLayout()
+        left_panel.addWidget(QtWidgets.QLabel("Point-based Transfer Function"))
+    
+        self.point_canvas_container = QtWidgets.QStackedWidget()
+        left_panel.addWidget(self.point_canvas_container)
+    
+        point_controls = QtWidgets.QHBoxLayout()
+        self.point_view_toggle = QtWidgets.QPushButton('Switch to 2D TF')
+        self.point_view_toggle.setCheckable(True)
+        self.point_view_toggle.toggled.connect(self.toggle_point_view)
+        point_controls.addWidget(self.point_view_toggle)
+    
+        self.point_reset_btn = QtWidgets.QPushButton('Reset Point TF View')
+        self.point_reset_btn.clicked.connect(self.reset_point_view)
+        point_controls.addWidget(self.point_reset_btn)
+    
+        left_panel.addLayout(point_controls)
+    
+        # Right side: Widget-based TF  
+        right_panel = QtWidgets.QVBoxLayout()
+        right_panel.addWidget(QtWidgets.QLabel("Widget-based Transfer Function"))
+    
+        self.widget_canvas_container = QtWidgets.QStackedWidget()
+        right_panel.addWidget(self.widget_canvas_container)
+    
+        widget_controls = QtWidgets.QHBoxLayout()
+        self.widget_view_toggle = QtWidgets.QPushButton('Switch to 1D View')
+        self.widget_view_toggle.setCheckable(True)
+        self.widget_view_toggle.toggled.connect(self.toggle_widget_view)
+        widget_controls.addWidget(self.widget_view_toggle)
+    
+        self.widget_reset_btn = QtWidgets.QPushButton('Reset Widget TF View')
+        self.widget_reset_btn.clicked.connect(self.reset_widget_view)
+        widget_controls.addWidget(self.widget_reset_btn)
+    
+        right_panel.addLayout(widget_controls)
+    
+        # Add widget manager to right panel
+        self.widget_manager = None  # Will be created in setup
+        right_panel.addWidget(QtWidgets.QLabel("Widget Management"))
+    
+        dual_view_container.addLayout(left_panel)
+        dual_view_container.addLayout(right_panel)
+    
+        vlay.addLayout(dual_view_container)
 
         self.frame.setLayout(vlay)
         self.setCentralWidget(self.frame)
@@ -228,6 +261,10 @@ class VolumeApp(QtWidgets.QMainWindow):
             print("Failed to load default dataset:", e)
             # Create empty data for UI initialization
             self.setup_fallback_data()
+
+        # Setup both TF systems
+        self.setup_point_based_tf()
+        self.setup_widget_based_tf()
 
     def setup_fallback_data(self):
         """Setup fallback data when no volume is loaded."""
@@ -459,6 +496,84 @@ class VolumeApp(QtWidgets.QMainWindow):
             xs, ys, colors = tf_data
             # Use external source to update both canvases
             self.update_opacity_function(xs, ys, colors)
+
+    def setup_point_based_tf(self):
+        """Setup point-based transfer function"""
+        print("Setting up point-based TF...")
+    
+        # Initialize TF manager
+        self.tf_manager = TFManager(self.tf_selector, self)
+    
+        # Get initial TF data
+        points_x, points_y, colors = self.tf_manager.get_initial_tf_data(self.normalized_scalars)
+    
+        # 1D TF canvas
+        self.plot_canvas = TransferFunctionPlot(
+            self.update_opacity_function_from_1d,
+            self.normalized_scalars, 
+            self.log_checkbox
+        )
+        self.plot_canvas.points_x = points_x
+        self.plot_canvas.points_y = points_y  
+        self.plot_canvas.colors = colors
+        self.plot_canvas._sort_points_with_colors()
+    
+        self.tf1d_widget = TFCanvasWidget(self.plot_canvas, parent=self, label='Reset 1D View')
+        self.point_canvas_container.addWidget(self.tf1d_widget)
+
+        # 2D TF canvas
+        hist2d, _, _ = np.histogram2d(
+            self.normalized_scalars, self.gradient_normalized, 
+            bins=(256, 256), range=((0, 255), (0, 255))
+        )
+        self.tf2d_canvas = TransferFunction2D(
+            hist2d, self.intensity_range, self.gradient_range, self.log_checkbox
+        )
+        self.tf2d_canvas.set_tf_state(points_x, points_y, colors)
+        self.tf2d_widget = TFCanvasWidget(self.tf2d_canvas, parent=self, label='Reset 2D View')
+        self.point_canvas_container.addWidget(self.tf2d_widget)
+    
+        # Start with 1D view
+        self.point_canvas_container.setCurrentIndex(0)
+        self.point_view_toggle.setChecked(False)
+
+def setup_widget_based_tf(self):
+    """Setup widget-based transfer function"""
+    print("Setting up widget-based TF...")
+    
+    # Create unified canvas
+    self.tf_canvas = UnifiedTFCanvas(
+        tf_type='2d',
+        data=self.normalized_scalars,
+        gradient_data=self.gradient_normalized,
+        update_callback=self.update_volume_from_widgets
+    )
+    
+    # Create canvas widget
+    self.canvas_widget = TFCanvasWidget(self.tf_canvas, self, label='Reset TF View')
+    self.widget_canvas_container.addWidget(self.canvas_widget)
+    
+    # Add widget manager
+    self.widget_manager = WidgetManager(self.tf_canvas)
+    
+    # Find the widget manager placeholder and replace it
+    for i in range(self.frame.layout().count()):
+        item = self.frame.layout().itemAt(i)
+        if (isinstance(item, QtWidgets.QVBoxLayout) and 
+            item.itemAt(3) and  # Assuming 4th item is the label
+            item.itemAt(3).widget() and 
+            item.itemAt(3).widget().text() == "Widget Management"):
+            # Replace the label with actual widget manager
+            old_widget = item.itemAt(3).widget()
+            item.removeWidget(old_widget)
+            old_widget.deleteLater()
+            item.insertWidget(3, self.widget_manager)
+            break
+    
+    # Add initial widget
+    test_widget = WidgetFactory.create_widget(WidgetType.GAUSSIAN)
+    self.tf_canvas.add_widget(test_widget)
+    self.widget_manager.update_widget_list()
 
 
 # --------------------------- Main ---------------------------
