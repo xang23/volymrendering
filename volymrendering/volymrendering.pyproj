@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>314161ac-befe-428c-af17-4b7ef48bbff1</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>volymrendering.py</StartupFile>
+    <StartupFile>volume_app.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -21,7 +21,22 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="base_transfer_function.py" />
+    <Compile Include="dataset_loader.py" />
+    <Compile Include="old.py" />
+    <Compile Include="tf_canvas_widget.py" />
+    <Compile Include="tf_manager.py" />
+    <Compile Include="tf_widgets.py" />
+    <Compile Include="transfer_function_2d.py" />
+    <Compile Include="transfer_function_plot.py" />
+    <Compile Include="volume_app.py" />
+    <Compile Include="volume_renderer.py" />
     <Compile Include="volymrendering.py" />
+    <Compile Include="widget_factory.py" />
+    <Compile Include="widget_manager_ui.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="unified_tf_canvas.py" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
