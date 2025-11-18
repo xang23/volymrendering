@@ -314,6 +314,21 @@ class UnifiedTFCanvas(BaseTransferFunction):
                 
         return min(1.0, final_opacity)  # Clamp to [0,1]
 
+    #ND
+    def set_feature_pair(self, feature_x, feature_y, feature_data_x, feature_data_y):
+        """Dynamically switch what features are displayed"""
+        self.current_features = (feature_x, feature_y)
+    
+        # Update the data attributes that your existing code uses
+        self.data = feature_data_x
+        self.gradient_data = feature_data_y
+    
+        # Update the canvas
+        self._setup_canvas()  # This will use the new data
+        self._draw()  # Redraw with existing widgets
+    
+        print(f"🔄 TF Canvas updated: {feature_x} vs {feature_y}")
+
     # In UnifiedTFCanvas class
     def reset_view(self):
         """Reset the view to default"""

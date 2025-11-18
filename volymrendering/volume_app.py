@@ -1,6 +1,10 @@
 ﻿import sys
 import numpy as np
 
+# ND, nD - BUT DON'T AUTO-CREATE IT
+# from simple_feature_browser import SimpleFeatureBrowser  # ← COMMENT OUT FOR NOW
+
+# WidgetTF
 from widget_factory import WidgetFactory, WidgetType
 from unified_tf_canvas import UnifiedTFCanvas
 from widget_manager_ui import WidgetManager
@@ -41,6 +45,10 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.volume_renderer = VolumeRenderer()
         self._tf_change_source = None
         self._active_tf_system = 'point'  # 'point' or 'widget' - only one active for rendering
+        
+        # nD features - INITIALIZE BUT DON'T CREATE
+        self.feature_browser = None
+        self.current_dataset_dir = None
         
         self.setup_ui()
         self.setup_data_components()
@@ -144,14 +152,15 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.log_checkbox.stateChanged.connect(self.toggle_log_histogram)
         toolbar.addWidget(self.log_checkbox)
         
-        # Active system switcher
+        # Active system switcher - ADD nD OPTION BUT DON'T ACTIVATE IT
         toolbar.addWidget(QtWidgets.QLabel("Active System:"))
         self.system_selector = QtWidgets.QComboBox()
         self.system_selector.addItem("Point-based TF", 'point')
         self.system_selector.addItem("Widget-based TF", 'widget')
+        self.system_selector.addItem("nD Feature TF", 'nd')  # ← ADD BUT DON'T USE YET
         self.system_selector.currentTextChanged.connect(self.switch_active_system)
         toolbar.addWidget(self.system_selector)
-        
+
         toolbar.addStretch(1)
 
         # Load dataset button
@@ -169,6 +178,9 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.save_tf_btn = QtWidgets.QPushButton("Save TF")
         self.save_tf_btn.clicked.connect(self.save_current_tf)
         toolbar.addWidget(self.save_tf_btn)
+
+        # Store toolbar reference for potential nD use
+        self.toolbar_layout = toolbar
 
         return toolbar
 
@@ -287,6 +299,10 @@ class VolumeApp(QtWidgets.QMainWindow):
             self.widget_active_indicator.setText("⚫ INACTIVE")
             self.widget_active_indicator.setStyleSheet("color: gray;")
             
+            # Hide feature browser if it exists
+            if self.feature_browser:
+                self.feature_browser.hide()
+            
             # Trigger render with point-based TF
             if hasattr(self, 'plot_canvas'):
                 self.update_opacity_function(
@@ -295,18 +311,73 @@ class VolumeApp(QtWidgets.QMainWindow):
                     self.plot_canvas.colors
                 )
                 
-        else:  # widget
+        elif system_type == 'widget':
             self.point_active_indicator.setText("⚫ INACTIVE")
             self.point_active_indicator.setStyleSheet("color: gray;")
             self.widget_active_indicator.setText("⚫ ACTIVE")
             self.widget_active_indicator.setStyleSheet("color: green; font-weight: bold;")
             
+            # Hide feature browser if it exists
+            if self.feature_browser:
+                self.feature_browser.hide()
+            
             # Trigger render with widget-based TF
             self.update_volume_from_widgets()
+            
+        elif system_type == 'nd':  # nD mode - SAFE IMPLEMENTATION
+            self.point_active_indicator.setText("⚫ INACTIVE")
+            self.point_active_indicator.setStyleSheet("color: gray;")
+            self.widget_active_indicator.setText("⚫ INACTIVE") 
+            self.widget_active_indicator.setStyleSheet("color: gray;")
+            
+            # SAFE nD activation - don't break existing systems
+            self.safe_activate_nd_mode()
+
+    def safe_activate_nd_mode(self):
+        """Safely activate nD mode without breaking existing systems"""
+        print("🔄 Attempting to activate nD mode...")
+        
+        # Check if we have the required components
+        if not hasattr(self, 'normalized_scalars') or not hasattr(self, 'tf_canvas'):
+            print("❌ Cannot activate nD mode: missing required components")
+            # Fall back to widget mode
+            self.system_selector.setCurrentIndex(1)  # Switch to widget mode
+            return
+            
+        try:
+            # Try to import and create feature browser
+            from simple_feature_browser import SimpleFeatureBrowser
+            
+            if self.feature_browser is None:
+                print("🔧 Creating feature browser...")
+                self.feature_browser = SimpleFeatureBrowser(
+                    dataset_directory=self.current_dataset_dir or ".",
+                    volume_data=self.normalized_scalars,
+                    tf_canvas=self.tf_canvas
+                )
+                # Add to toolbar
+                if hasattr(self, 'toolbar_layout'):
+                    self.toolbar_layout.addWidget(self.feature_browser)
+            
+            # Show the feature browser
+            if self.feature_browser:
+                self.feature_browser.show()
+                print("✅ nD mode activated successfully")
+                
+            # Use widget-based rendering (same as widget mode)
+            self.update_volume_from_widgets()
+            
+        except Exception as e:
+            print(f"❌ Failed to activate nD mode: {e}")
+            # Fall back to widget mode
+            self.system_selector.setCurrentIndex(1)  # Switch to widget mode
+            QtWidgets.QMessageBox.warning(self, "nD Mode Error", 
+                                        f"Could not activate nD feature exploration:\n{e}")
 
     def update_volume_from_widgets(self):
         """Update volume from widget-based TF - only if active"""
-        if self._active_tf_system != 'widget':
+        # Allow both 'widget' AND 'nd' modes to use widget rendering
+        if self._active_tf_system not in ['widget', 'nd']:
             return  # Skip if not active
             
         samples = self.tf_canvas.sample_for_vtk()
@@ -436,10 +507,16 @@ class VolumeApp(QtWidgets.QMainWindow):
         (self.normalized_scalars, self.gradient_normalized, 
          self.intensity_range, self.gradient_range) = self.dataset_loader.normalize_data(np_scalars, np_gradient)
 
+        # Store dataset directory for potential nD use
+        self.current_dataset_dir = os.path.dirname(file_path)
+
         self.volume_renderer.set_volume_data(image_data, reader)
         self.update_tf_canvases()
         self.volume_renderer.reset_camera()
         self.vtkWidget.GetRenderWindow().Render()
+
+        # DON'T create feature browser here - wait until nD mode is activated
+        # This prevents interference with existing systems
 
         self.image_data = image_data
         self.reader = reader

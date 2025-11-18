@@ -24,6 +24,7 @@
     <Compile Include="base_transfer_function.py" />
     <Compile Include="dataset_loader.py" />
     <Compile Include="old.py" />
+    <Compile Include="simple_feature_browser.py" />
     <Compile Include="tf_canvas_widget.py" />
     <Compile Include="tf_manager.py" />
     <Compile Include="tf_widgets.py" />

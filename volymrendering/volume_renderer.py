@@ -16,24 +16,29 @@ class VolumeRenderer:
         
         self.setup_volume()
 
+    # IN volume_renderer.py - ADD TO YOUR VolumeRenderer CLASS
     def setup_volume(self):
-        """Initialize volume properties and setup for THIS instance."""
+        """Initialize volume properties with texture size limits"""
         print(f"Setting up VolumeRenderer: {self.renderer_id}")
-        
-        # Configure volume property for THIS instance
+    
+        # Configure volume property
         self.volume_property.SetColor(self.color_function)
         self.volume_property.SetScalarOpacity(self.opacity_function)
         self.volume_property.ShadeOn()
         self.volume_property.SetInterpolationTypeToLinear()
-
-        # Set up volume for THIS instance
+    
+        # FIX: Set smaller texture size to avoid OpenGL warnings
+        self.mapper.SetMaxMemoryInBytes(512 * 1024 * 1024)  # 512 MB limit
+        self.mapper.SetAutoAdjustSampleDistances(0)  # Better control
+    
+        # Set up volume
         self.volume.SetMapper(self.mapper)
         self.volume.SetProperty(self.volume_property)
-        
-        # Add volume to THIS instance's renderer
+    
+        # Add volume to renderer
         self.renderer.AddVolume(self.volume)
         self.renderer.SetBackground(0.1, 0.1, 0.1)
-        
+    
         print(f"VolumeRenderer {self.renderer_id} setup complete")
 
     def update_transfer_functions(self, points_x, points_y, colors, intensity_range):
