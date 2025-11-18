@@ -17,25 +17,47 @@ class UnifiedTFCanvas(BaseTransferFunction):
         self.gradient_data = gradient_data
         self.update_callback = update_callback
         
+        # ADD DATA RANGE TRACKING
+        self.intensity_range = (0.0, 255.0)  # Default, but will be updated
+        self.gradient_range = (0.0, 255.0)   # Default, but will be updated
+        
         self.widgets = []
         self.active_widget = None
         self.dragging_widget = False
         
+        # Initialize with actual data ranges
+        self._update_data_ranges()
         self._setup_canvas()
+    
+    def _update_data_ranges(self):
+        """Update data ranges based on current data"""
+        if self.data is not None:
+            self.intensity_range = (float(np.min(self.data)), float(np.max(self.data)))
+        if self.gradient_data is not None:
+            self.gradient_range = (float(np.min(self.gradient_data)), float(np.max(self.gradient_data)))
         
+        print(f"📊 Canvas data ranges updated: intensity={self.intensity_range}, gradient={self.gradient_range}")
+    
     def _setup_canvas(self):
-        """Setup canvas based on TF type"""
+        """Setup canvas based on TF type - FIXED RANGES"""
+        self._update_data_ranges()  # Ensure ranges are current
+        
         if self.tf_type == '2d' and self.data is not None and self.gradient_data is not None:
+            # USE ACTUAL DATA RANGES
             hist2d, _, _ = np.histogram2d(
                 self.data, self.gradient_data, 
-                bins=256, range=((0, 255), (0, 255))
+                bins=256, 
+                range=(self.intensity_range, self.gradient_range)  # ← DYNAMIC RANGES!
             )
             self.im = self.ax.imshow(
                 np.log1p(hist2d.T), origin='lower', cmap='hot', 
-                extent=(0, 255, 0, 255), aspect='auto', alpha=0.7
+                extent=(self.intensity_range[0], self.intensity_range[1], 
+                       self.gradient_range[0], self.gradient_range[1]),
+                aspect='auto', alpha=0.7
             )
         elif self.tf_type == '1d' and self.data is not None:
-            hist, bins = np.histogram(self.data, bins=256, range=(0, 255))
+            # USE ACTUAL DATA RANGE
+            hist, bins = np.histogram(self.data, bins=256, range=self.intensity_range)
             bin_centers = 0.5 * (bins[:-1] + bins[1:])
             self.ax.plot(bin_centers, hist / hist.max(), color='gray', alpha=0.5)
             self.ax.fill_between(bin_centers, hist / hist.max(), color='lightgray', alpha=0.3)
@@ -44,6 +66,19 @@ class UnifiedTFCanvas(BaseTransferFunction):
         self.ax.set_ylabel('Gradient Magnitude' if self.tf_type == '2d' else 'Opacity')
         self.ax.set_title(f'{self.tf_type.upper()} Transfer Function with Widgets')
         self.ax.grid(True, alpha=0.3)
+
+
+    def canvas_to_data_coords(self, x_canvas, y_canvas):
+        """Convert canvas coordinates (0-1) to data coordinates"""
+        data_x = x_canvas * (self.intensity_range[1] - self.intensity_range[0]) + self.intensity_range[0]
+        data_y = y_canvas * (self.gradient_range[1] - self.gradient_range[0]) + self.gradient_range[0]
+        return data_x, data_y
+
+    def data_to_canvas_coords(self, x_data, y_data):
+        """Convert data coordinates to canvas coordinates (0-1)"""
+        canvas_x = (x_data - self.intensity_range[0]) / (self.intensity_range[1] - self.intensity_range[0])
+        canvas_y = (y_data - self.gradient_range[0]) / (self.gradient_range[1] - self.gradient_range[0])
+        return canvas_x, canvas_y
 
     def add_widget(self, widget):
         """Add a widget to the canvas"""
@@ -68,27 +103,32 @@ class UnifiedTFCanvas(BaseTransferFunction):
         
     
     def sample_for_vtk(self, num_samples=256):
-        """Sample the combined TF for VTK"""
+        """Sample the combined TF for VTK - FIXED RANGES"""
         samples = []
+        intensity_min, intensity_max = self.intensity_range
+    
         for i in range(num_samples):
-            intensity = (i / num_samples) * 255
-            
+            # Sample in data coordinates
+            intensity = intensity_min + (i / num_samples) * (intensity_max - intensity_min)
+        
             if self.tf_type == '1d':
-                # 1D sampling - gradient is always 0
-                opacity = self.calculate_combined_opacity(intensity, 0)
-                gradient = 0
+                # 1D sampling - use midpoint of gradient range
+                gradient = (self.gradient_range[0] + self.gradient_range[1]) / 2
+                opacity = self.calculate_combined_opacity(intensity, gradient)
             else:
                 # 2D sampling - find maximum opacity across gradients
                 max_opacity = 0
-                best_gradient = 128
-                for grad_sample in range(0, 256, 10):  # Sample gradients
+                best_gradient = self.gradient_range[0]
+                grad_samples = np.linspace(self.gradient_range[0], self.gradient_range[1], 10)
+            
+                for grad_sample in grad_samples:
                     sample_opacity = self.calculate_combined_opacity(intensity, grad_sample)
                     if sample_opacity > max_opacity:
                         max_opacity = sample_opacity
                         best_gradient = grad_sample
                 opacity = max_opacity
                 gradient = best_gradient
-                
+            
             if opacity > 0.001:
                 # Use color from the widget with highest opacity
                 max_widget_opacity = 0
@@ -99,7 +139,7 @@ class UnifiedTFCanvas(BaseTransferFunction):
                         max_widget_opacity = widget_opacity
                         best_color = widget.color
                 samples.append((intensity, opacity, best_color))
-                
+            
         return samples
     
     def _draw(self):
@@ -226,49 +266,55 @@ class UnifiedTFCanvas(BaseTransferFunction):
         self.ax.add_patch(polygon)
     
     def on_press(self, event):
-        """Handle mouse press for widget interaction"""
+        """Handle mouse press for widget interaction - FIXED COORDINATES"""
         if event.inaxes != self.ax:
             return
-        
-        # Check for Shift+click for color change (same as point-based TF)
+    
+        # Convert click coordinates to data space
+        click_x_data = event.xdata
+        click_y_data = event.ydata
+    
+        # Check for Shift+click for color change
         if getattr(event, 'button', None) == 1:  # Left click
             try:
                 mods = event.guiEvent.modifiers()
             except Exception:
                 mods = 0
-            
+        
             if mods & Qt.ShiftModifier:
-                # Shift+click - change widget color (same pattern as point-based TF)
                 for i, widget in enumerate(self.widgets):
-                    distance = np.sqrt((event.xdata - widget.center_intensity)**2 + 
-                                     (event.ydata - widget.center_gradient)**2)
-                    if distance < 10:  # Clicked near widget center
+                    # Use data coordinates for distance calculation
+                    distance = np.sqrt((click_x_data - widget.center_intensity)**2 + 
+                                     (click_y_data - widget.center_gradient)**2)
+                    if distance < (self.intensity_range[1] - self.intensity_range[0]) * 0.05:  # 5% of range
                         qcolor = QtWidgets.QColorDialog.getColor()
                         if qcolor.isValid():
                             widget.color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
                             self._draw()
                             self._notify_app()
                         return
-    
-        # Existing widget dragging code
+
+        # Existing widget dragging code - using data coordinates
         for i, widget in enumerate(self.widgets):
-            distance = np.sqrt((event.xdata - widget.center_intensity)**2 + 
-                             (event.ydata - widget.center_gradient)**2)
-            if distance < 10:  # Clicked near widget center
+            distance = np.sqrt((click_x_data - widget.center_intensity)**2 + 
+                             (click_y_data - widget.center_gradient)**2)
+            threshold = (self.intensity_range[1] - self.intensity_range[0]) * 0.05  # 5% of range
+            if distance < threshold:
                 self.active_widget = i
                 self.dragging_widget = True
                 self._draw()
                 return
-            
+        
         # If no widget clicked, use base class behavior for point addition
         super().on_press(event)
-        
+    
     def on_motion(self, event):
-        """Handle mouse motion for widget dragging"""
+        """Handle mouse motion for widget dragging - FIXED COORDINATES"""
         if self.dragging_widget and event.inaxes == self.ax and self.active_widget is not None:
             widget = self.widgets[self.active_widget]
-            widget.center_intensity = max(0, min(255, event.xdata))
-            widget.center_gradient = max(0, min(255, event.ydata))
+            # Use data coordinates directly
+            widget.center_intensity = event.xdata
+            widget.center_gradient = event.ydata
             self._draw()
             self._notify_app()
         else:

@@ -1,138 +1,102 @@
-﻿# simple_feature_browser.py
+﻿# simple_matrix_browser.py
 import numpy as np
-from pathlib import Path
 from PyQt5 import QtWidgets, QtCore
+from unified_tf_canvas import UnifiedTFCanvas  # YOUR EXISTING CANVAS!
 
-class SimpleFeatureBrowser(QtWidgets.QWidget):
-    def __init__(self, dataset_directory, volume_data, tf_canvas):
+class SimpleMatrixBrowser(QtWidgets.QWidget):
+    def __init__(self, feature_data_dict, update_callback=None):
+        """
+        feature_data_dict: {feature_name: normalized_data}
+        Uses YOUR existing UnifiedTFCanvas for each cell!
+        """
         super().__init__()
-        self.dataset_dir = Path(dataset_directory)
-        self.volume_data = volume_data
-        self.tf_canvas = tf_canvas  # Your existing UnifiedTFCanvas!
-        self.available_features = {}
+        self.feature_data = feature_data_dict
+        self.update_callback = update_callback
+        self.feature_names = list(feature_data_dict.keys())
+        self.canvases = {}  # (i,j) -> YOUR UnifiedTFCanvas
         
         self.setup_ui()
-        self.discover_features()
+        self.build_matrix()
     
     def setup_ui(self):
-        layout = QtWidgets.QVBoxLayout()
+        """Simple matrix UI using your existing canvas components"""
+        self.main_layout = QtWidgets.QVBoxLayout()
         
         # Title
-        title = QtWidgets.QLabel("Feature Explorer")
+        title = QtWidgets.QLabel(f"Feature Matrix - Click any cell to explore")
         title.setStyleSheet("font-weight: bold; color: darkblue;")
-        layout.addWidget(title)
+        self.main_layout.addWidget(title)
         
-        # Feature pair selector
-        pair_layout = QtWidgets.QHBoxLayout()
+        # Matrix container
+        self.matrix_container = QtWidgets.QWidget()
+        self.matrix_layout = QtWidgets.QGridLayout()
+        self.matrix_container.setLayout(self.matrix_layout)
         
-        self.feature_x_combo = QtWidgets.QComboBox()
-        self.feature_y_combo = QtWidgets.QComboBox()
+        # Scroll area for large matrices
+        self.scroll_area = QtWidgets.QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setWidget(self.matrix_container)
+        self.scroll_area.setMinimumSize(700, 500)
         
-        self.load_btn = QtWidgets.QPushButton("Load Feature Pair")
-        self.load_btn.clicked.connect(self.load_feature_pair)
-        
-        pair_layout.addWidget(QtWidgets.QLabel("X:"))
-        pair_layout.addWidget(self.feature_x_combo)
-        pair_layout.addWidget(QtWidgets.QLabel("Y:"))
-        pair_layout.addWidget(self.feature_y_combo)
-        pair_layout.addWidget(self.load_btn)
-        
-        layout.addLayout(pair_layout)
-        
-        # Status
-        self.status_label = QtWidgets.QLabel("Select features and click Load")
-        self.status_label.setStyleSheet("color: gray; font-size: 10px;")
-        layout.addWidget(self.status_label)
-        
-        self.setLayout(layout)
+        self.main_layout.addWidget(self.scroll_area)
+        self.setLayout(self.main_layout)
     
-    def discover_features(self):
-        """Simple feature discovery"""
-        self.available_features.clear()
+    def build_matrix(self):
+        """Build matrix using YOUR existing UnifiedTFCanvas for each cell"""
+        n = len(self.feature_names)
+        print(f"🔄 Building {n}x{n} feature matrix...")
         
-        # Look for feature files
-        for npy_file in self.dataset_dir.glob("*.npy"):
-            feature_name = npy_file.stem
-            self.available_features[feature_name] = str(npy_file)
+        # Column headers
+        for j in range(1, n):
+            header = QtWidgets.QLabel(self.feature_names[j])
+            header.setAlignment(QtCore.Qt.AlignCenter)
+            header.setStyleSheet("font-weight: bold; background: #e0e0e0; padding: 2px;")
+            self.matrix_layout.addWidget(header, 0, j)
         
-        # Add volume-derived features
-        self.available_features['Intensity'] = 'volume'
-        self.available_features['Gradient'] = 'volume'
-        
-        # Populate combos
-        feature_names = sorted(self.available_features.keys())
-        self.feature_x_combo.addItems(feature_names)
-        self.feature_y_combo.addItems(feature_names)
-        
-        # Set defaults
-        if 'Intensity' in feature_names and 'Gradient' in feature_names:
-            self.feature_x_combo.setCurrentText('Intensity')
-            self.feature_y_combo.setCurrentText('Gradient')
+        # Row labels and YOUR canvases
+        for i in range(n - 1):
+            # Row label
+            row_label = QtWidgets.QLabel(self.feature_names[i])
+            row_label.setAlignment(QtCore.Qt.AlignCenter)
+            row_label.setStyleSheet("font-weight: bold; background: #e0e0e0; padding: 2px;")
+            self.matrix_layout.addWidget(row_label, i + 1, 0)
             
-        self.status_label.setText(f"Found {len(feature_names)} features")
-    
-    def load_feature_pair(self):
-        """Load and display selected feature pair in existing TF canvas"""
-        feature_x = self.feature_x_combo.currentText()
-        feature_y = self.feature_y_combo.currentText()
+            # YOUR UnifiedTFCanvas for each feature pair
+            for j in range(i + 1, n):
+                canvas = self.create_matrix_cell(i, j)
+                self.canvases[(i, j)] = canvas
+                self.matrix_layout.addWidget(canvas, i + 1, j)
         
-        if feature_x == feature_y:
-            self.status_label.setText("❌ Select different features")
-            self.status_label.setStyleSheet("color: red; font-size: 10px;")
-            return
+        print(f"✅ Matrix built with {len(self.canvases)} feature pairs")
+    
+    def create_matrix_cell(self, idx_i, idx_j):
+        """Create a matrix cell using YOUR UnifiedTFCanvas"""
+        feature_x = self.feature_names[idx_i]
+        feature_y = self.feature_names[idx_j]
         
-        try:
-            # Load feature data
-            data_x = self.load_feature_data(feature_x)
-            data_y = self.load_feature_data(feature_y)
-            
-            # Update your existing TF canvas!
-            if hasattr(self.tf_canvas, 'set_feature_pair'):
-                self.tf_canvas.set_feature_pair(feature_x, feature_y, data_x, data_y)
-                self.status_label.setText(f"✅ Loaded: {feature_x} vs {feature_y}")
-                self.status_label.setStyleSheet("color: green; font-size: 10px;")
-            else:
-                self.status_label.setText("❌ TF Canvas doesn't support feature pairs")
-                self.status_label.setStyleSheet("color: red; font-size: 10px;")
-            
-        except Exception as e:
-            self.status_label.setText(f"❌ Error: {str(e)}")
-            self.status_label.setStyleSheet("color: red; font-size: 10px;")
-            print(f"Error loading features: {e}")
-    
-    def load_feature_data(self, feature_name):
-        """Load a single feature"""
-        if feature_name == 'Intensity':
-            return self.normalize_to_255(self.volume_data.flatten())
-        elif feature_name == 'Gradient':
-            return self.normalize_to_255(self.compute_gradient())
-        else:
-            data = np.load(self.available_features[feature_name])
-            return self.normalize_to_255(data)
-    
-    def compute_gradient(self):
-        """Simple gradient computation"""
-        try:
-            # For 3D volume
-            if len(self.volume_data.shape) == 3:
-                grad = np.gradient(self.volume_data)
-                grad_mag = np.sqrt(grad[0]**2 + grad[1]**2 + grad[2]**2)
-            else:
-                # For 2D or flat data
-                grad_mag = np.abs(np.gradient(self.volume_data))
-            return grad_mag.flatten()
-        except:
-            # Fallback
-            return np.ones_like(self.volume_data.flatten()) * 128
-    
-    def normalize_to_255(self, data):
-        """Normalize data to 0-255 range"""
-        data = data.astype(np.float32)
-        data_min = np.min(data)
-        data_max = np.max(data)
+        # USE YOUR EXISTING UNIFIEDTFCANVAS!
+        canvas = UnifiedTFCanvas(
+            tf_type='2d',
+            data=self.feature_data[feature_x],
+            gradient_data=self.feature_data[feature_y],
+            update_callback=lambda: self.on_cell_click(feature_x, feature_y)
+        )
         
-        if data_max - data_min > 0:
-            normalized = (data - data_min) / (data_max - data_min) * 255
-            return normalized.astype(np.uint8)
-        else:
-            return np.zeros_like(data, dtype=np.uint8)
+        # Smaller size for matrix cells
+        canvas.setMinimumSize(150, 150)
+        canvas.setMaximumSize(200, 200)
+        
+        # Update labels to show feature names
+        canvas.ax.set_xlabel(feature_x, fontsize=6)
+        canvas.ax.set_ylabel(feature_y, fontsize=6)
+        canvas.ax.set_title(f'{feature_x} vs {feature_y}', fontsize=7)
+        canvas.ax.tick_params(labelsize=5)
+        canvas.draw()
+        
+        return canvas
+    
+    def on_cell_click(self, feature_x, feature_y):
+        """When user interacts with a matrix cell"""
+        print(f"🎯 Matrix cell clicked: {feature_x} vs {feature_y}")
+        if self.update_callback:
+            self.update_callback(feature_x, feature_y)

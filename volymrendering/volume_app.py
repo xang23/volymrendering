@@ -1,9 +1,6 @@
 ﻿import sys
 import numpy as np
 
-# ND, nD - BUT DON'T AUTO-CREATE IT
-# from simple_feature_browser import SimpleFeatureBrowser  # ← COMMENT OUT FOR NOW
-
 # WidgetTF
 from widget_factory import WidgetFactory, WidgetType
 from unified_tf_canvas import UnifiedTFCanvas
@@ -57,30 +54,30 @@ class VolumeApp(QtWidgets.QMainWindow):
     def setup_ui(self):
         """Setup the main user interface with dual view"""
         self.frame = QtWidgets.QFrame()
-        vlay = QtWidgets.QVBoxLayout(self.frame)
+        self.main_layout = QtWidgets.QVBoxLayout(self.frame)  # Store as instance variable
 
         # VTK widget
         self.vtkWidget = QVTKRenderWindowInteractor(self.frame)
         self.vtkWidget.GetRenderWindow().AddRenderer(self.volume_renderer.get_renderer())
         self.interactor = self.vtkWidget.GetRenderWindow().GetInteractor()
-        vlay.addWidget(self.vtkWidget)
+        self.main_layout.addWidget(self.vtkWidget)
 
         # Toolbar
         toolbar = self.create_toolbar()
-        vlay.addLayout(toolbar)
+        self.main_layout.addLayout(toolbar)
 
         # DUAL VIEW CONTAINER
-        dual_view_container = QtWidgets.QHBoxLayout()
+        self.dual_view_container = QtWidgets.QHBoxLayout()
         
         # Setup both panels
         left_panel = self.setup_point_panel()
         right_panel = self.setup_widget_panel()
         
-        dual_view_container.addLayout(left_panel)
-        dual_view_container.addLayout(right_panel)
-        vlay.addLayout(dual_view_container)
+        self.dual_view_container.addLayout(left_panel)
+        self.dual_view_container.addLayout(right_panel)
+        self.main_layout.addLayout(self.dual_view_container)
 
-        self.frame.setLayout(vlay)
+        self.frame.setLayout(self.main_layout)
         self.setCentralWidget(self.frame)
 
     def setup_point_panel(self):
@@ -152,12 +149,12 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.log_checkbox.stateChanged.connect(self.toggle_log_histogram)
         toolbar.addWidget(self.log_checkbox)
         
-        # Active system switcher - ADD nD OPTION BUT DON'T ACTIVATE IT
+        # Active system switcher
         toolbar.addWidget(QtWidgets.QLabel("Active System:"))
         self.system_selector = QtWidgets.QComboBox()
         self.system_selector.addItem("Point-based TF", 'point')
         self.system_selector.addItem("Widget-based TF", 'widget')
-        self.system_selector.addItem("nD Feature TF", 'nd')  # ← ADD BUT DON'T USE YET
+        self.system_selector.addItem("nD Feature TF", 'nd')
         self.system_selector.currentTextChanged.connect(self.switch_active_system)
         toolbar.addWidget(self.system_selector)
 
@@ -178,9 +175,6 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.save_tf_btn = QtWidgets.QPushButton("Save TF")
         self.save_tf_btn.clicked.connect(self.save_current_tf)
         toolbar.addWidget(self.save_tf_btn)
-
-        # Store toolbar reference for potential nD use
-        self.toolbar_layout = toolbar
 
         return toolbar
 
@@ -324,55 +318,95 @@ class VolumeApp(QtWidgets.QMainWindow):
             # Trigger render with widget-based TF
             self.update_volume_from_widgets()
             
-        elif system_type == 'nd':  # nD mode - SAFE IMPLEMENTATION
+        elif system_type == 'nd':  # nD mode - MATRIX IMPLEMENTATION
             self.point_active_indicator.setText("⚫ INACTIVE")
             self.point_active_indicator.setStyleSheet("color: gray;")
             self.widget_active_indicator.setText("⚫ INACTIVE") 
             self.widget_active_indicator.setStyleSheet("color: gray;")
             
-            # SAFE nD activation - don't break existing systems
+            # ACTIVATE MATRIX MODE
             self.safe_activate_nd_mode()
 
     def safe_activate_nd_mode(self):
-        """Safely activate nD mode without breaking existing systems"""
-        print("🔄 Attempting to activate nD mode...")
+        """Safely activate nD mode with feature matrix"""
+        print("🔄 Activating Feature Matrix mode...")
         
         # Check if we have the required components
         if not hasattr(self, 'normalized_scalars') or not hasattr(self, 'tf_canvas'):
             print("❌ Cannot activate nD mode: missing required components")
-            # Fall back to widget mode
-            self.system_selector.setCurrentIndex(1)  # Switch to widget mode
+            self.system_selector.setCurrentIndex(1)  # Fall back to widget mode
             return
             
         try:
-            # Try to import and create feature browser
-            from simple_feature_browser import SimpleFeatureBrowser
+            # Import and create MATRIX browser (not simple feature browser)
+            from simple_feature_browser import SimpleMatrixBrowser
+            
+            # Create feature data dictionary from your existing data
+            feature_data = {
+                'Intensity': self.normalized_scalars,
+                'Gradient': self.gradient_normalized
+            }
+            # Add more features here as needed:
+            # feature_data['Texture'] = your_texture_data
+            # feature_data['Curvature'] = your_curvature_data
             
             if self.feature_browser is None:
-                print("🔧 Creating feature browser...")
-                self.feature_browser = SimpleFeatureBrowser(
-                    dataset_directory=self.current_dataset_dir or ".",
-                    volume_data=self.normalized_scalars,
-                    tf_canvas=self.tf_canvas
+                print("🔧 Creating feature matrix...")
+                self.feature_browser = SimpleMatrixBrowser(
+                    feature_data_dict=feature_data,
+                    update_callback=self.on_matrix_cell_clicked
                 )
-                # Add to toolbar
-                if hasattr(self, 'toolbar_layout'):
-                    self.toolbar_layout.addWidget(self.feature_browser)
+                
+                # Add to main layout (insert after toolbar, before dual view)
+                if hasattr(self, 'main_layout'):
+                    # Remove existing feature browser if any
+                    if self.feature_browser.parent():
+                        self.feature_browser.setParent(None)
+                    self.main_layout.insertWidget(2, self.feature_browser)
             
-            # Show the feature browser
+            # Show the feature matrix
             if self.feature_browser:
                 self.feature_browser.show()
-                print("✅ nD mode activated successfully")
+                feature_count = len(feature_data)
+                print(f"✅ Feature Matrix activated with {feature_count} features")
                 
-            # Use widget-based rendering (same as widget mode)
+            # Use widget-based rendering
             self.update_volume_from_widgets()
             
         except Exception as e:
-            print(f"❌ Failed to activate nD mode: {e}")
-            # Fall back to widget mode
-            self.system_selector.setCurrentIndex(1)  # Switch to widget mode
+            print(f"❌ Failed to activate Feature Matrix: {e}")
+            self.system_selector.setCurrentIndex(1)  # Fall back to widget mode
             QtWidgets.QMessageBox.warning(self, "nD Mode Error", 
-                                        f"Could not activate nD feature exploration:\n{e}")
+                                        f"Could not activate feature matrix:\n{e}")
+
+    def on_matrix_cell_clicked(self, feature_x, feature_y):
+        """When user clicks a cell in the matrix - FIXED VERSION"""
+        print(f"🎯 Loading into main TF: {feature_x} vs {feature_y}")
+    
+        try:
+            feature_data = self.feature_browser.feature_data
+            data_x = feature_data[feature_x]
+            data_y = feature_data[feature_y]
+        
+            # Update the canvas with new data
+            self.tf_canvas.data = data_x
+            self.tf_canvas.gradient_data = data_y
+        
+            # Force canvas to update ranges and redraw
+            self.tf_canvas._update_data_ranges()
+            self.tf_canvas._setup_canvas()
+            self.tf_canvas._draw()
+        
+            print(f"✅ Canvas updated with {feature_x} vs {feature_y}")
+            print(f"📊 New ranges: intensity={self.tf_canvas.intensity_range}, gradient={self.tf_canvas.gradient_range}")
+        
+            # Update volume rendering
+            self.update_volume_from_widgets()
+        
+        except Exception as e:
+            print(f"❌ Error updating main TF: {e}")
+            import traceback
+            traceback.print_exc()
 
     def update_volume_from_widgets(self):
         """Update volume from widget-based TF - only if active"""
@@ -511,7 +545,7 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.current_dataset_dir = os.path.dirname(file_path)
 
         self.volume_renderer.set_volume_data(image_data, reader)
-        self.update_tf_canvases()
+        self.update_tf_canvases()  # ← This only updates point-based TF!
         self.volume_renderer.reset_camera()
         self.vtkWidget.GetRenderWindow().Render()
 
@@ -537,6 +571,39 @@ class VolumeApp(QtWidgets.QMainWindow):
                 self.tf2d_canvas._on_log_toggled(True)
             else:
                 self.tf2d_canvas._draw()
+
+        # UPDATE WIDGET-BASED TF SYSTEM
+        if hasattr(self, 'tf_canvas'):
+            self.tf_canvas.data = self.normalized_scalars
+            self.tf_canvas.gradient_data = self.gradient_normalized
+            self.tf_canvas._setup_canvas()  # Force complete refresh
+            self.tf_canvas._draw()
+            print("✅ Updated widget-based TF")
+        
+        print(f"📊 New data ranges - Intensity: {self.intensity_range}, Gradient: {self.gradient_range}")
+
+    def reset_widget_tf_for_new_data(self):
+        """Completely reset widget TF system for new dataset"""
+        if hasattr(self, 'tf_canvas'):
+            # Clear existing widgets
+            self.tf_canvas.widgets.clear()
+        
+            # Add a default widget centered in the new data range
+            intensity_center = (self.intensity_range[0] + self.intensity_range[1]) / 2
+            gradient_center = (self.gradient_range[0] + self.gradient_range[1]) / 2
+        
+            default_widget = WidgetFactory.create_widget(
+                WidgetType.GAUSSIAN,
+                center_intensity=intensity_center,
+                center_gradient=gradient_center,
+                intensity_std=(self.intensity_range[1] - self.intensity_range[0]) * 0.1,
+                gradient_std=(self.gradient_range[1] - self.gradient_range[0]) * 0.1
+            )
+            self.tf_canvas.add_widget(default_widget)
+        
+            # Update widget manager
+            if hasattr(self, 'widget_manager'):
+                self.widget_manager.update_widget_list()
 
     def toggle_log_histogram(self, state):
         """Toggle logarithmic histogram display."""
