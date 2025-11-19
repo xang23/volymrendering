@@ -47,6 +47,9 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.feature_browser = None
         self.current_dataset_dir = None
         
+        # Widget manager window
+        self.widget_manager_window = None
+        
         self.setup_ui()
         self.setup_data_components()
         self.setup_dual_transfer_functions()
@@ -202,14 +205,67 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.widget_active_indicator.setStyleSheet("color: gray;")
         controls.addWidget(self.widget_active_indicator)
 
+        # ADD BUTTON TO OPEN WIDGET MANAGER WINDOW
+        self.open_widget_manager_btn = QtWidgets.QPushButton('Open Widget Manager')
+        self.open_widget_manager_btn.clicked.connect(self.show_widget_manager)
+        controls.addWidget(self.open_widget_manager_btn)
+
         panel_layout.addLayout(controls)
 
-        # CREATE WIDGET MANAGER PLACEHOLDER (will be set later)
-        self.widget_manager_placeholder = QtWidgets.QWidget()
-        self.widget_manager_placeholder.setMinimumHeight(200)
-        panel_layout.addWidget(self.widget_manager_placeholder)
-
         return panel_widget
+
+    def create_widget_manager_window(self):
+        """Create the floating widget manager window"""
+        # Create a separate window for widget manager
+        self.widget_manager_window = QtWidgets.QMainWindow(self)
+        self.widget_manager_window.setWindowTitle("Widget Manager")
+        self.widget_manager_window.setObjectName("WidgetManagerWindow")
+    
+        # Set window flags to make it a tool window (stays on top of main window)
+        self.widget_manager_window.setWindowFlags(
+            Qt.Tool | 
+            Qt.WindowCloseButtonHint | 
+            Qt.WindowMinimizeButtonHint
+        )
+    
+        # Create central widget
+        central_widget = QtWidgets.QWidget()
+        self.widget_manager_window.setCentralWidget(central_widget)
+    
+        # Create layout
+        layout = QtWidgets.QVBoxLayout(central_widget)
+    
+        # Create the actual widget manager
+        self.widget_manager = WidgetManager(self.tf_canvas)
+        layout.addWidget(self.widget_manager)
+    
+        # Set reasonable size
+        self.widget_manager_window.resize(400, 300)
+    
+        # Connect close event to handle cleanup
+        self.widget_manager_window.closeEvent = self.widget_manager_window_close_event
+
+    def widget_manager_window_close_event(self, event):
+        """Handle widget manager window closing"""
+        # Just hide instead of close to preserve state
+        self.widget_manager_window.hide()
+        event.ignore()  # Don't actually close, just hide
+
+    def show_widget_manager(self):
+        """Show the widget manager window"""
+        if not hasattr(self, 'widget_manager_window') or self.widget_manager_window is None:
+            self.create_widget_manager_window()
+    
+        # Position near the main window
+        main_window_geometry = self.geometry()
+        self.widget_manager_window.move(
+            main_window_geometry.right() - 450,  # Offset from right edge
+            main_window_geometry.top() + 50      # Offset from top
+        )
+    
+        self.widget_manager_window.show()
+        self.widget_manager_window.raise_()  # Bring to front
+        self.widget_manager_window.activateWindow()
 
     def create_toolbar(self):
         """Create the main toolbar with controls."""
@@ -230,6 +286,11 @@ class VolumeApp(QtWidgets.QMainWindow):
         toolbar.addWidget(self.system_selector)
 
         toolbar.addStretch(1)
+
+        # ADD WIDGET MANAGER BUTTON TO TOOLBAR
+        self.widget_manager_btn = QtWidgets.QPushButton("Widget Manager")
+        self.widget_manager_btn.clicked.connect(self.show_widget_manager)
+        toolbar.addWidget(self.widget_manager_btn)
 
         # Load dataset button
         self.load_data_btn = QtWidgets.QPushButton("Load Dataset")
@@ -322,19 +383,8 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.canvas_widget = TFCanvasWidget(self.tf_canvas, self, label='Reset TF View')
         self.widget_canvas_container.addWidget(self.canvas_widget)
 
-        # CREATE WIDGET MANAGER NOW THAT tf_canvas EXISTS
+        # CREATE WIDGET MANAGER BUT DON'T SHOW IT YET - it will be in separate window
         self.widget_manager = WidgetManager(self.tf_canvas)
-    
-        # Replace placeholder with actual widget manager
-        if hasattr(self, 'widget_manager_placeholder'):
-            # Find the placeholder in the layout and replace it
-            layout = self.widget_manager_placeholder.parent().layout()
-            if layout:
-                index = layout.indexOf(self.widget_manager_placeholder)
-                if index >= 0:
-                    layout.removeWidget(self.widget_manager_placeholder)
-                    layout.insertWidget(index, self.widget_manager)
-                    self.widget_manager_placeholder.deleteLater()
 
         # Add initial widget
         test_widget = WidgetFactory.create_widget(WidgetType.GAUSSIAN)
@@ -735,6 +785,12 @@ class VolumeApp(QtWidgets.QMainWindow):
             # Render both windows (only point one changes)
             self.vtkWidget_point.GetRenderWindow().Render()
             self.vtkWidget_widget.GetRenderWindow().Render()
+
+    def closeEvent(self, event):
+        """Handle main window closing"""
+        if hasattr(self, 'widget_manager_window') and self.widget_manager_window:
+            self.widget_manager_window.close()
+        event.accept()
 
 
 # --------------------------- Main ---------------------------
