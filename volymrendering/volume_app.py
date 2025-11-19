@@ -52,93 +52,164 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.setup_dual_transfer_functions()
 
     def setup_ui(self):
-        """Setup the main user interface with dual view"""
+        """Setup the main user interface with dual render views"""
         self.frame = QtWidgets.QFrame()
-        self.main_layout = QtWidgets.QVBoxLayout(self.frame)  # Store as instance variable
+        self.main_layout = QtWidgets.QVBoxLayout(self.frame)
 
-        # VTK widget
-        self.vtkWidget = QVTKRenderWindowInteractor(self.frame)
-        self.vtkWidget.GetRenderWindow().AddRenderer(self.volume_renderer.get_renderer())
-        self.interactor = self.vtkWidget.GetRenderWindow().GetInteractor()
-        self.main_layout.addWidget(self.vtkWidget)
+        # MAIN VERTICAL SPLITTER: Renders on top, TF panels on bottom
+        main_splitter = QtWidgets.QSplitter(Qt.Vertical)
 
-        # Toolbar
-        toolbar = self.create_toolbar()
-        self.main_layout.addLayout(toolbar)
+        # DUAL RENDER CONTAINER (top part)
+        render_splitter = QtWidgets.QSplitter(Qt.Horizontal)
 
-        # DUAL VIEW CONTAINER
-        self.dual_view_container = QtWidgets.QHBoxLayout()
-        
-        # Setup both panels
+        # Create two VTK renderers
+        self.vtkWidget_point = QVTKRenderWindowInteractor()
+        self.vtkWidget_point.GetRenderWindow().AddRenderer(self.volume_renderer.get_renderer())
+
+        # Create second renderer for widget-based TF
+        from volume_renderer import VolumeRenderer
+        self.volume_renderer_widget = VolumeRenderer()
+        self.vtkWidget_widget = QVTKRenderWindowInteractor()
+        self.vtkWidget_widget.GetRenderWindow().AddRenderer(self.volume_renderer_widget.get_renderer())
+
+        # Set up interactors
+        self.interactor_point = self.vtkWidget_point.GetRenderWindow().GetInteractor()
+        self.interactor_widget = self.vtkWidget_widget.GetRenderWindow().GetInteractor()
+
+        # Create labeled containers for each renderer
+        point_render_container = self.create_render_container(self.vtkWidget_point, "Point-based TF Render")
+        widget_render_container = self.create_render_container(self.vtkWidget_widget, "Widget-based TF Render")
+
+        # Add to render splitter
+        render_splitter.addWidget(point_render_container)
+        render_splitter.addWidget(widget_render_container)
+
+        # DUAL VIEW CONTAINER for TF editors (bottom part)
+        tf_splitter = QtWidgets.QSplitter(Qt.Horizontal)
+
         left_panel = self.setup_point_panel()
         right_panel = self.setup_widget_panel()
-        
-        self.dual_view_container.addLayout(left_panel)
-        self.dual_view_container.addLayout(right_panel)
-        self.main_layout.addLayout(self.dual_view_container)
+
+        tf_splitter.addWidget(left_panel)
+        tf_splitter.addWidget(right_panel)
+
+        # Add both splitters to main splitter
+        main_splitter.addWidget(render_splitter)  # Top: renders
+        main_splitter.addWidget(tf_splitter)      # Bottom: TF editors
+
+        # Set initial sizes (60% for renders, 40% for TF panels)
+        main_splitter.setSizes([600, 400])
+
+        # Toolbar at the very top (not in splitter)
+        toolbar = self.create_toolbar()
+
+        # Make splitters more visible
+        main_splitter.setStyleSheet("QSplitter::handle { background-color: #c0c0c0; }")
+        render_splitter.setStyleSheet("QSplitter::handle { background-color: #a0a0a0; }")
+        tf_splitter.setStyleSheet("QSplitter::handle { background-color: #a0a0a0; }")
+
+        self.main_layout.addLayout(toolbar)
+        self.main_layout.addWidget(main_splitter)
 
         self.frame.setLayout(self.main_layout)
         self.setCentralWidget(self.frame)
 
+        # Set initial window size
+        self.resize(1800, 1200)
+
+        # Initialize both renderers
+        self.initialize_both_renderers()
+
+    def create_render_container(self, vtk_widget, label_text):
+        """Create a labeled container for a renderer"""
+        container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(container)
+        
+        # Add label
+        label = QtWidgets.QLabel(label_text)
+        label.setStyleSheet("font-weight: bold; font-size: 12px; padding: 5px;")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+        
+        # Add the VTK widget
+        layout.addWidget(vtk_widget)
+        
+        return container
+
+    def initialize_both_renderers(self):
+        """Initialize both VTK renderers with the same data"""
+        # Both renderers will use the same initial data
+        if hasattr(self, 'image_data') and hasattr(self, 'reader'):
+            self.volume_renderer_widget.set_volume_data(self.image_data, self.reader)
+        
+        # Initialize both interactors
+        self.interactor_point.Initialize()
+        self.interactor_widget.Initialize()
+        self.interactor_point.Start()
+        self.interactor_widget.Start()
+
     def setup_point_panel(self):
-        """Setup point-based panel"""
-        panel = QtWidgets.QVBoxLayout()
-        panel.addWidget(QtWidgets.QLabel("Point-based Transfer Function"))
-        
+        """Setup point-based panel as a widget"""
+        panel_widget = QtWidgets.QWidget()
+        panel_layout = QtWidgets.QVBoxLayout(panel_widget)
+    
+        panel_layout.addWidget(QtWidgets.QLabel("Point-based Transfer Function"))
+    
         self.point_canvas_container = QtWidgets.QStackedWidget()
-        panel.addWidget(self.point_canvas_container)
-        
+        panel_layout.addWidget(self.point_canvas_container)
+    
         # Controls
         controls = QtWidgets.QHBoxLayout()
         self.point_view_toggle = QtWidgets.QPushButton('Switch to 2D TF')
         self.point_view_toggle.setCheckable(True)
         self.point_view_toggle.toggled.connect(self.toggle_point_view)
         controls.addWidget(self.point_view_toggle)
-        
+    
         self.point_reset_btn = QtWidgets.QPushButton('Reset View')
         self.point_reset_btn.clicked.connect(self.reset_point_view)
         controls.addWidget(self.point_reset_btn)
-        
-        # Active system indicator
+    
         self.point_active_indicator = QtWidgets.QLabel("⚫ ACTIVE")
         self.point_active_indicator.setStyleSheet("color: green; font-weight: bold;")
         controls.addWidget(self.point_active_indicator)
-        
-        panel.addLayout(controls)
-        return panel
+    
+        panel_layout.addLayout(controls)
+    
+        return panel_widget
 
     def setup_widget_panel(self):
-        """Setup widget-based panel"""
-        panel = QtWidgets.QVBoxLayout()
-        panel.addWidget(QtWidgets.QLabel("Widget-based Transfer Function"))
-        
+        """Setup widget-based panel as a widget"""
+        panel_widget = QtWidgets.QWidget()
+        panel_layout = QtWidgets.QVBoxLayout(panel_widget)
+
+        panel_layout.addWidget(QtWidgets.QLabel("Widget-based Transfer Function"))
+
         self.widget_canvas_container = QtWidgets.QStackedWidget()
-        panel.addWidget(self.widget_canvas_container)
-        
+        panel_layout.addWidget(self.widget_canvas_container)
+
         # Controls
         controls = QtWidgets.QHBoxLayout()
         self.widget_view_toggle = QtWidgets.QPushButton('Switch to 1D View')
         self.widget_view_toggle.setCheckable(True)
         self.widget_view_toggle.toggled.connect(self.toggle_widget_view)
         controls.addWidget(self.widget_view_toggle)
-        
+
         self.widget_reset_btn = QtWidgets.QPushButton('Reset View')
         self.widget_reset_btn.clicked.connect(self.reset_widget_view)
         controls.addWidget(self.widget_reset_btn)
-        
-        # Active system indicator
+
         self.widget_active_indicator = QtWidgets.QLabel("⚫ INACTIVE") 
         self.widget_active_indicator.setStyleSheet("color: gray;")
         controls.addWidget(self.widget_active_indicator)
-        
-        panel.addLayout(controls)
-        
-        # Widget manager placeholder
+
+        panel_layout.addLayout(controls)
+
+        # CREATE WIDGET MANAGER PLACEHOLDER (will be set later)
         self.widget_manager_placeholder = QtWidgets.QWidget()
         self.widget_manager_placeholder.setMinimumHeight(200)
-        panel.addWidget(self.widget_manager_placeholder)
-        
-        return panel
+        panel_layout.addWidget(self.widget_manager_placeholder)
+
+        return panel_widget
 
     def create_toolbar(self):
         """Create the main toolbar with controls."""
@@ -247,22 +318,23 @@ class VolumeApp(QtWidgets.QMainWindow):
             gradient_data=self.gradient_normalized,
             update_callback=self.update_volume_from_widgets
         )
-        
+    
         self.canvas_widget = TFCanvasWidget(self.tf_canvas, self, label='Reset TF View')
         self.widget_canvas_container.addWidget(self.canvas_widget)
 
-        # Replace placeholder with actual widget manager
+        # CREATE WIDGET MANAGER NOW THAT tf_canvas EXISTS
         self.widget_manager = WidgetManager(self.tf_canvas)
-        self.widget_manager_placeholder.setParent(None)
-        
-        # Find the right panel and add widget manager
-        for i in range(self.frame.layout().count()):
-            item = self.frame.layout().itemAt(i)
-            if isinstance(item, QtWidgets.QHBoxLayout):  # dual_view_container
-                right_panel = item.itemAt(1)  # Right panel is index 1
-                if right_panel and right_panel.layout():
-                    right_panel.layout().addWidget(self.widget_manager)
-                    break
+    
+        # Replace placeholder with actual widget manager
+        if hasattr(self, 'widget_manager_placeholder'):
+            # Find the placeholder in the layout and replace it
+            layout = self.widget_manager_placeholder.parent().layout()
+            if layout:
+                index = layout.indexOf(self.widget_manager_placeholder)
+                if index >= 0:
+                    layout.removeWidget(self.widget_manager_placeholder)
+                    layout.insertWidget(index, self.widget_manager)
+                    self.widget_manager_placeholder.deleteLater()
 
         # Add initial widget
         test_widget = WidgetFactory.create_widget(WidgetType.GAUSSIAN)
@@ -273,43 +345,37 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.update_opacity_function(points_x, points_y, colors)
 
         # Initialize VTK
-        self.interactor.Initialize()
-        self.interactor.Start()
+        self.interactor_point.Initialize()
+        self.interactor_point.Start()
+        self.interactor_widget.Initialize()
+        self.interactor_widget.Start()
 
         print("Dual transfer functions setup complete")
         print("="*50 + "\n")
 
-    # ===== PERFORMANCE OPTIMIZATIONS =====
-    
     def switch_active_system(self, system_name):
         """Switch which TF system is active for rendering - OPTIMIZED"""
         system_type = self.system_selector.currentData()
         self._active_tf_system = system_type
-        
+    
         # Update UI indicators
         if system_type == 'point':
             self.point_active_indicator.setText("⚫ ACTIVE")
             self.point_active_indicator.setStyleSheet("color: green; font-weight: bold;")
             self.widget_active_indicator.setText("⚫ INACTIVE")
             self.widget_active_indicator.setStyleSheet("color: gray;")
-            
-            # Hide feature browser if it exists
-            if self.feature_browser:
-                self.feature_browser.hide()
-            
-            # Trigger render with point-based TF
-            if hasattr(self, 'plot_canvas'):
-                self.update_opacity_function(
-                    self.plot_canvas.points_x, 
-                    self.plot_canvas.points_y, 
-                    self.plot_canvas.colors
-                )
-                
+        
+            # Highlight the active render window
+            self.highlight_active_render('point')
+        
         elif system_type == 'widget':
             self.point_active_indicator.setText("⚫ INACTIVE")
             self.point_active_indicator.setStyleSheet("color: gray;")
             self.widget_active_indicator.setText("⚫ ACTIVE")
             self.widget_active_indicator.setStyleSheet("color: green; font-weight: bold;")
+        
+            # Highlight the active render window
+            self.highlight_active_render('widget')
             
             # Hide feature browser if it exists
             if self.feature_browser:
@@ -326,6 +392,23 @@ class VolumeApp(QtWidgets.QMainWindow):
             
             # ACTIVATE MATRIX MODE
             self.safe_activate_nd_mode()
+
+    def highlight_active_render(self, active_system):
+        """Visual highlight to show which render window is active"""
+        # Reset both first
+        self.reset_render_highlights()
+    
+        if active_system == 'point':
+            # Highlight point-based render window (e.g., green border)
+            self.vtkWidget_point.setStyleSheet("border: 3px solid green;")
+        elif active_system == 'widget':
+            # Highlight widget-based render window  
+            self.vtkWidget_widget.setStyleSheet("border: 3px solid green;")
+
+    def reset_render_highlights(self):
+        """Remove highlights from both render windows"""
+        self.vtkWidget_point.setStyleSheet("border: 1px solid gray;")
+        self.vtkWidget_widget.setStyleSheet("border: 1px solid gray;")
 
     def safe_activate_nd_mode(self):
         """Safely activate nD mode with feature matrix"""
@@ -409,7 +492,7 @@ class VolumeApp(QtWidgets.QMainWindow):
             traceback.print_exc()
 
     def update_volume_from_widgets(self):
-        """Update volume from widget-based TF - only if active"""
+        """Update volume from widget-based TF"""
         # Allow both 'widget' AND 'nd' modes to use widget rendering
         if self._active_tf_system not in ['widget', 'nd']:
             return  # Skip if not active
@@ -419,31 +502,32 @@ class VolumeApp(QtWidgets.QMainWindow):
             intensities = [s[0] for s in samples]
             opacities = [s[1] for s in samples]
             colors = [s[2] for s in samples]
-            
-            self.volume_renderer.update_transfer_functions(
+        
+            # Only update widget-based renderer
+            self.volume_renderer_widget.update_transfer_functions(
                 intensities, opacities, colors, self.intensity_range
             )
-            self.vtkWidget.GetRenderWindow().Render()
+        
+            # Render both windows
+            self.vtkWidget_widget.GetRenderWindow().Render()
 
     def update_opacity_function(self, xs, ys, colors):
-        """Update VTK transfer functions - only if point-based is active"""
+        """Update VTK transfer functions - ONLY update point renderer"""
         if self._active_tf_system != 'point':
             return  # Skip if not active
-            
-        self.volume_renderer.update_transfer_functions(xs, ys, colors, self.intensity_range)
         
+        # ONLY update point-based renderer (left window)
+        self.volume_renderer.update_transfer_functions(xs, ys, colors, self.intensity_range)
+
         # Sync the OTHER canvas (not the source)
         if self._tf_change_source == '1d':
-            # 1D was source, sync to 2D
             try:
                 self.tf2d_canvas.set_tf_state(xs, ys, colors)
             except Exception as e:
                 print(f"Error syncing to 2D canvas: {e}")
         elif self._tf_change_source == '2d':
-            # 2D was source, sync already done in update_opacity_function_from_2d
             pass
         else:
-            # External source (like loading TF), sync both
             try:
                 if hasattr(self, 'plot_canvas'):
                     self.plot_canvas.points_x = list(xs)
@@ -456,11 +540,9 @@ class VolumeApp(QtWidgets.QMainWindow):
             except Exception as e:
                 print(f"Error syncing canvases: {e}")
 
-        # Trigger render
-        self.vtkWidget.GetRenderWindow().Render()
+        # ONLY render the point window
+        self.vtkWidget_point.GetRenderWindow().Render()
 
-    # ===== UI CONTROL METHODS =====
-    
     def toggle_point_view(self, show_2d):
         """Toggle between 1D and 2D views for point-based TF"""
         idx = 1 if show_2d else 0
@@ -502,8 +584,6 @@ class VolumeApp(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Error resetting widget view: {e}")
 
-    # ===== EXISTING METHODS (keep as-is) =====
-    
     def update_opacity_function_from_1d(self, xs, ys, colors):
         """Update from 1D canvas - sync to 2D and VTK."""
         if self._tf_change_source == '2d':
@@ -536,21 +616,30 @@ class VolumeApp(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.critical(self, "Load Failed", f"Failed to load {file_path}:\n{e}")
 
     def load_volume(self, file_path):
-        """Load and process volume data."""
+        """Load and process volume data for BOTH renderers"""
         image_data, reader, np_scalars, np_gradient = self.dataset_loader.load_volume(file_path)
         (self.normalized_scalars, self.gradient_normalized, 
          self.intensity_range, self.gradient_range) = self.dataset_loader.normalize_data(np_scalars, np_gradient)
 
-        # Store dataset directory for potential nD use
         self.current_dataset_dir = os.path.dirname(file_path)
 
+        # Set volume data for BOTH renderers
         self.volume_renderer.set_volume_data(image_data, reader)
-        self.update_tf_canvases()  # ← This only updates point-based TF!
+        self.volume_renderer_widget.set_volume_data(image_data, reader)
+    
+        # Update ALL TF systems
+        self.update_tf_canvases()
+    
+        # Reset widget positions for new data range
+        self.reset_widget_tf_for_new_data()
+    
+        # Reset cameras for BOTH renderers
         self.volume_renderer.reset_camera()
-        self.vtkWidget.GetRenderWindow().Render()
-
-        # DON'T create feature browser here - wait until nD mode is activated
-        # This prevents interference with existing systems
+        self.volume_renderer_widget.reset_camera()
+    
+        # Render BOTH windows
+        self.vtkWidget_point.GetRenderWindow().Render()
+        self.vtkWidget_widget.GetRenderWindow().Render()
 
         self.image_data = image_data
         self.reader = reader
@@ -628,12 +717,24 @@ class VolumeApp(QtWidgets.QMainWindow):
             print("Widget TF saving not yet implemented")
 
     def load_selected_tf(self, idx):
-        """Load selected transfer function."""
+        """Load selected transfer function into point-based system only"""
         tf_data = self.tf_manager.load_selected_tf(idx)
         if tf_data:
             xs, ys, colors = tf_data
-            # Load into point-based system (widget loading TODO)
-            self.update_opacity_function(xs, ys, colors)
+            # Load into point-based system only
+            if hasattr(self, 'plot_canvas'):
+                self.plot_canvas.points_x = xs
+                self.plot_canvas.points_y = ys
+                self.plot_canvas.colors = colors
+                self.plot_canvas._sort_points_with_colors()
+                self.plot_canvas._draw()
+        
+            # Update point renderer with the loaded TF
+            self.volume_renderer.update_transfer_functions(xs, ys, colors, self.intensity_range)
+        
+            # Render both windows (only point one changes)
+            self.vtkWidget_point.GetRenderWindow().Render()
+            self.vtkWidget_widget.GetRenderWindow().Render()
 
 
 # --------------------------- Main ---------------------------
