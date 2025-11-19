@@ -1,4 +1,4 @@
-from base_transfer_function import BaseTransferFunction
+﻿from base_transfer_function import BaseTransferFunction
 from matplotlib.colors import LogNorm
 import numpy as np
 import matplotlib.pyplot as plt  # Add this import
@@ -81,31 +81,27 @@ class TransferFunction2D(BaseTransferFunction):
         """Draw the 2D transfer function."""
         curr_xlim = self._cached_xlim
         curr_ylim = self._cached_ylim
-    
+        
         # Update histogram display
         self.im.set_data(self._get_display_data().T)
 
         # Update TF overlay
         self._draw_tf_overlay()
 
-        # Apply view limits WITH ZOOM CONSTRAINTS
+        # Apply view limits
         self._apply_view_limits()
         self._update_view_limits()
 
-        # Adjust grid based on zoom level - IMPROVED LOGIC
+        # Adjust grid based on zoom level
         x_range = self._cached_xlim[1] - self._cached_xlim[0]
         y_range = self._cached_ylim[1] - self._cached_ylim[0]
-    
-        # Always show grid, but adjust density
-        if x_range <= 50 and y_range <= 50:
-            self.ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
-        elif x_range <= 100 and y_range <= 100:
+        if x_range > 10 and y_range > 10:
             self.ax.grid(True, alpha=0.2, linestyle='--', linewidth=0.3)
         else:
-            self.ax.grid(True, alpha=0.1, linestyle=':', linewidth=0.2)  # Keep grid for large zooms
+            self.ax.grid(False)
 
-        # Format ticks
-        self._format_ticks(x_range, y_range)
+        # Format ticks - THIS NOW CALLS THE BASE CLASS METHOD
+        self._format_ticks(x_range, y_range)  # ← This will use the base class method!
 
         self.draw()
 
@@ -128,72 +124,35 @@ class TransferFunction2D(BaseTransferFunction):
             else:
                 self.tf_scatter.set_facecolor([(1.0, 1.0, 1.0)] * len(x))
 
-    def _format_ticks(self, x_range, y_range):
-        """Format ticks for 2D view - ADD THIS METHOD"""
-        # X-axis formatting
-        if x_range <= 10:
-            self.ax.xaxis.set_major_locator(plt.MultipleLocator(1))
-        elif x_range <= 50:
-            self.ax.xaxis.set_major_locator(plt.MultipleLocator(5))
-        elif x_range <= 100:
-            self.ax.xaxis.set_major_locator(plt.MultipleLocator(10))
-        else:
-            self.ax.xaxis.set_major_locator(plt.MultipleLocator(50))
-            
-        # Y-axis formatting
-        if y_range <= 10:
-            self.ax.yaxis.set_major_locator(plt.MultipleLocator(1))
-        elif y_range <= 50:
-            self.ax.yaxis.set_major_locator(plt.MultipleLocator(5))
-        elif y_range <= 100:
-            self.ax.yaxis.set_major_locator(plt.MultipleLocator(10))
-        else:
-            self.ax.yaxis.set_major_locator(plt.MultipleLocator(50))
-
-    # ===== 2D-SPECIFIC EVENT HANDLING =====
-    
-
-    def set_tf_state(self, xs, ys, colors):
-        """Override to ensure proper state setting and drawing."""
-        self.points_x = list(xs)
-        self.points_y = list(ys)
-        self.colors = list(colors)
-        self._sort_points_with_colors()
-        self._draw()
-
     def _apply_view_limits(self):
-        """Only prevent excessive zoom out, allow unlimited zoom in"""
+        """Force zoom to stay within 0-255 range - OPTIMIZED"""
         super()._apply_view_limits()
     
         xlim = self.ax.get_xlim()
         ylim = self.ax.get_ylim()
     
-        # ONLY PREVENT ZOOM OUT BEYOND 3x DATA RANGE
-        max_zoom_out = 3.0
-        max_range = 255 * max_zoom_out
-    
-        current_x_range = xlim[1] - xlim[0]
-        current_y_range = ylim[1] - ylim[0]
-    
+        # Only adjust if actually out of bounds (reduces redraws)
         needs_adjustment = False
-        new_xlim, new_ylim = xlim, ylim
     
-        if current_x_range > max_range:
-            center_x = (xlim[0] + xlim[1]) / 2
-            new_xlim = (center_x - max_range/2, center_x + max_range/2)
+        if xlim[0] < 0 or xlim[1] > 255:
+            xlim = (max(0, xlim[0]), min(255, xlim[1]))
             needs_adjustment = True
         
-        if current_y_range > max_range:
-            center_y = (ylim[0] + ylim[1]) / 2
-            new_ylim = (center_y - max_range/2, center_y + max_range/2)
+        if ylim[0] < 0 or ylim[1] > 255:
+            ylim = (max(0, ylim[0]), min(255, ylim[1]))
+            needs_adjustment = True
+    
+        # Prevent too much zoom in (optional - for usability)
+        if xlim[1] - xlim[0] < 5:  # Minimum 5 unit view
+            center = (xlim[0] + xlim[1]) / 2
+            xlim = (center - 2.5, center + 2.5)
             needs_adjustment = True
         
+        if ylim[1] - ylim[0] < 5:
+            center = (ylim[0] + ylim[1]) / 2
+            ylim = (center - 2.5, center + 2.5)
+            needs_adjustment = True
+    
         if needs_adjustment:
-            self.ax.set_xlim(new_xlim)
-            self.ax.set_ylim(new_ylim)
-
-    def reset_view(self):
-        """Reset view to show full 0-255 range"""
-        self.ax.set_xlim(0, 255)
-        self.ax.set_ylim(0, 255)
-        self._draw()
+            self.ax.set_xlim(xlim)
+            self.ax.set_ylim(ylim)
