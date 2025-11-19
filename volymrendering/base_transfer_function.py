@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt5.QtCore import Qt
@@ -216,20 +216,22 @@ class BaseTransferFunction(FigureCanvas):
             return
         if event.xdata is None or event.ydata is None:
             return
-            
+        
         x_data, y_data = self._get_data_coords(event.xdata, event.ydata)
-        x_clipped = float(np.clip(x_data, 0.0, 255.0))
-        y_clipped = float(np.clip(y_data, 0.0, 1.0))
-        
+    
+        # KEEP THE ORIGINAL 0-255 CONSTRAINT FOR TF CALCULATIONS
+        x_clipped = float(np.clip(x_data, 0.0, 255.0))  # ← KEEP 0-255 for TF data!
+        y_clipped = float(np.clip(y_data, 0.0, 1.0))    # ← KEEP 0-1 for TF data!
+    
         self.update_point(self.selected_index, x_clipped, y_clipped)
-        
+    
         # Update selected index after sorting
         try:
             self.selected_index = min(range(len(self.points_x)), 
                                     key=lambda i: abs(self.points_x[i] - x_clipped))
         except Exception:
             self.selected_index = None
-            
+        
         self._update_view_limits()
 
     def on_release(self, event):

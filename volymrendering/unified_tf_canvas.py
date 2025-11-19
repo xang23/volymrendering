@@ -30,38 +30,39 @@ class UnifiedTFCanvas(BaseTransferFunction):
         self._setup_canvas()
     
     def _update_data_ranges(self):
-        """Update data ranges based on current data"""
-        if self.data is not None:
-            self.intensity_range = (float(np.min(self.data)), float(np.max(self.data)))
-        if self.gradient_data is not None:
-            self.gradient_range = (float(np.min(self.gradient_data)), float(np.max(self.gradient_data)))
-        
-        print(f"📊 Canvas data ranges updated: intensity={self.intensity_range}, gradient={self.gradient_range}")
-    
+        """ALWAYS use 0-255 range - don't calculate from data"""
+        self.intensity_range = (0.0, 255.0)
+        self.gradient_range = (0.0, 255.0)
+
     def _setup_canvas(self):
-        """Setup canvas based on TF type - FIXED RANGES"""
-        self._update_data_ranges()  # Ensure ranges are current
-        
+        """Setup canvas - ALWAYS use 0-255 range"""
+        self.ax.clear()
+    
         if self.tf_type == '2d' and self.data is not None and self.gradient_data is not None:
-            # USE ACTUAL DATA RANGES
-            hist2d, _, _ = np.histogram2d(
+            # ALWAYS use 0-255 range for histogram
+            hist2d, x_edges, y_edges = np.histogram2d(
                 self.data, self.gradient_data, 
                 bins=256, 
-                range=(self.intensity_range, self.gradient_range)  # ← DYNAMIC RANGES!
+                range=((0, 255), (0, 255))  # ← HARDCODED 0-255!
             )
-            self.im = self.ax.imshow(
-                np.log1p(hist2d.T), origin='lower', cmap='hot', 
-                extent=(self.intensity_range[0], self.intensity_range[1], 
-                       self.gradient_range[0], self.gradient_range[1]),
-                aspect='auto', alpha=0.7
+            self.mesh = self.ax.pcolormesh(
+                x_edges, y_edges, np.log1p(hist2d.T),
+                cmap='hot', alpha=0.7, shading='auto'
             )
+        
+            # Set initial view to show full 0-255 range
+            self.ax.set_xlim(0, 255)
+            self.ax.set_ylim(0, 255)
+        
         elif self.tf_type == '1d' and self.data is not None:
-            # USE ACTUAL DATA RANGE
-            hist, bins = np.histogram(self.data, bins=256, range=self.intensity_range)
+            # ALWAYS use 0-255 range for 1D
+            hist, bins = np.histogram(self.data, bins=256, range=(0, 255))  # ← HARDCODED 0-255!
             bin_centers = 0.5 * (bins[:-1] + bins[1:])
             self.ax.plot(bin_centers, hist / hist.max(), color='gray', alpha=0.5)
             self.ax.fill_between(bin_centers, hist / hist.max(), color='lightgray', alpha=0.3)
-        
+            self.ax.set_xlim(0, 255)
+            self.ax.set_ylim(0, 1)
+    
         self.ax.set_xlabel('Intensity')
         self.ax.set_ylabel('Gradient Magnitude' if self.tf_type == '2d' else 'Opacity')
         self.ax.set_title(f'{self.tf_type.upper()} Transfer Function with Widgets')
@@ -377,8 +378,11 @@ class UnifiedTFCanvas(BaseTransferFunction):
 
     # In UnifiedTFCanvas class
     def reset_view(self):
-        """Reset the view to default"""
-        self._reset_view_requested = True
-        self._cached_xlim = (0.0, 255.0)
-        self._cached_ylim = (0.0, 255.0) if self.tf_type == '2d' else (0.0, 1.0)
-        self._draw()
+        """Reset the view to show full 0-255 range"""
+        if hasattr(self, 'ax'):
+            self.ax.set_xlim(0, 255)
+            if self.tf_type == '2d':
+                self.ax.set_ylim(0, 255)
+            else:
+                self.ax.set_ylim(0, 1)
+            self.draw()
