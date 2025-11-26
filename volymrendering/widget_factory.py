@@ -140,19 +140,30 @@ class TriangularWidget(TFWidget):
 class RectangularWidget(TFWidget):
     def __init__(self, center_intensity=128, center_gradient=128,
                  intensity_width=40, gradient_height=40, 
+                 falloff=5.0,  # ← ADD FALLOFF
                  opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max'):
         super().__init__(WidgetType.RECTANGULAR, center_intensity, center_gradient, opacity, color, blend_mode)
         self.intensity_width = max(1, intensity_width)
         self.gradient_height = max(1, gradient_height)
+        self.falloff = max(0, falloff)  # Falloff distance
         
     def calculate_opacity(self, intensity, gradient):
-        # Simple rectangular region - uniform opacity inside, 0 outside
-        half_width = self.intensity_width / 2
-        half_height = self.gradient_height / 2
+        half_width = self.intensity_width / 2.0
+        half_height = self.gradient_height / 2.0
         
-        if (abs(intensity - self.center_intensity) <= half_width and
-            abs(gradient - self.center_gradient) <= half_height):
+        # Calculate distance from rectangle edges
+        dx = max(0, abs(intensity - self.center_intensity) - half_width)
+        dy = max(0, abs(gradient - self.center_gradient) - half_height)
+        
+        # If inside rectangle, full opacity
+        if dx == 0 and dy == 0:
             return self.opacity
+            
+        # If outside but within falloff, gradual decrease
+        distance = (dx**2 + dy**2) ** 0.5
+        if distance <= self.falloff:
+            return self.opacity * (1 - distance / self.falloff)
+            
         return 0.0
     
     def get_parameters(self):
@@ -160,6 +171,7 @@ class RectangularWidget(TFWidget):
         base_params.update({
             "intensity_width": {"value": self.intensity_width, "range": (5, 200), "type": "slider", "step": 1},
             "gradient_height": {"value": self.gradient_height, "range": (5, 200), "type": "slider", "step": 1},
+            "falloff": {"value": self.falloff, "range": (0, 50), "type": "slider", "step": 1},  # ← ADD FALLOFF PARAM
         })
         return base_params
     
@@ -169,6 +181,8 @@ class RectangularWidget(TFWidget):
             self.intensity_width = max(1, int(value))
         elif name == "gradient_height":
             self.gradient_height = max(1, int(value))
+        elif name == "falloff":
+            self.falloff = max(0, float(value))
 
 class EllipsoidWidget(TFWidget):
     def __init__(self, center_intensity=128, center_gradient=128,

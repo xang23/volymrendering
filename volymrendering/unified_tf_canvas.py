@@ -104,43 +104,55 @@ class UnifiedTFCanvas(BaseTransferFunction):
         
     
     def sample_for_vtk(self, num_samples=256):
-        """Sample the combined TF for VTK - FIXED RANGES"""
+        """Sample at ACTUAL widget positions"""
         samples = []
-        intensity_min, intensity_max = self.intensity_range
     
-        for i in range(num_samples):
-            # Sample in data coordinates
-            intensity = intensity_min + (i / num_samples) * (intensity_max - intensity_min)
+        print(f"🎯 Sampling at actual widget positions")
+    
+        if not self.widgets:
+            return [(0, 0.0, (1,1,1)), (255, 0.0, (1,1,1))]
+    
+        # For each widget, sample along intensity axis at its gradient position
+        for widget in self.widgets:
+            gradient = widget.center_gradient
         
-            if self.tf_type == '1d':
-                # 1D sampling - use midpoint of gradient range
-                gradient = (self.gradient_range[0] + self.gradient_range[1]) / 2
-                opacity = self.calculate_combined_opacity(intensity, gradient)
+            # Calculate the intensity range this widget affects
+            if widget.widget_type == WidgetType.RECTANGULAR:
+                start_x = max(0, widget.center_intensity - widget.intensity_width/2.0)
+                end_x = min(255, widget.center_intensity + widget.intensity_width/2.0)
+            elif widget.widget_type == WidgetType.GAUSSIAN:
+                # Gaussian affects wider range
+                start_x = max(0, widget.center_intensity - 3 * widget.intensity_std)
+                end_x = min(255, widget.center_intensity + 3 * widget.intensity_std)
             else:
-                # 2D sampling - find maximum opacity across gradients
-                max_opacity = 0
-                best_gradient = self.gradient_range[0]
-                grad_samples = np.linspace(self.gradient_range[0], self.gradient_range[1], 10)
-            
-                for grad_sample in grad_samples:
-                    sample_opacity = self.calculate_combined_opacity(intensity, grad_sample)
-                    if sample_opacity > max_opacity:
-                        max_opacity = sample_opacity
-                        best_gradient = grad_sample
-                opacity = max_opacity
-                gradient = best_gradient
-            
-            if opacity > 0.001:
-                # Use color from the widget with highest opacity
-                max_widget_opacity = 0
-                best_color = (1.0, 1.0, 1.0)
-                for widget in self.widgets:
-                    widget_opacity = widget.calculate_opacity(intensity, gradient)
-                    if widget_opacity > max_widget_opacity:
-                        max_widget_opacity = widget_opacity
-                        best_color = widget.color
-                samples.append((intensity, opacity, best_color))
-            
+                # Other widgets - use reasonable range
+                start_x = max(0, widget.center_intensity - 50)
+                end_x = min(255, widget.center_intensity + 50)
+        
+            # Sample this range
+            for intensity in range(int(start_x), int(end_x) + 1):
+                opacity = widget.calculate_opacity(intensity, gradient)
+                if opacity > 0.001:
+                    samples.append((intensity, opacity, widget.color))
+    
+        # Remove duplicates and ensure coverage
+        if samples:
+            # Remove duplicate intensities (keep highest opacity)
+            samples_dict = {}
+            for intensity, opacity, color in samples:
+                if intensity not in samples_dict or opacity > samples_dict[intensity][0]:
+                    samples_dict[intensity] = (opacity, color)
+        
+            samples = [(i, op, col) for i, (op, col) in samples_dict.items()]
+            samples.sort(key=lambda x: x[0])
+        
+            # Ensure complete coverage
+            if samples[0][0] > 0:
+                samples.insert(0, (0, 0.0, (1,1,1)))
+            if samples[-1][0] < 255:
+                samples.append((255, 0.0, (1,1,1)))
+    
+        print(f"📊 Generated {len(samples)} samples from widget positions")
         return samples
     
     def _draw(self):
