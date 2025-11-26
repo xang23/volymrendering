@@ -7,10 +7,9 @@ class WidgetType(Enum):
     TRIANGULAR = "triangular" 
     RECTANGULAR = "rectangular"
     ELLIPSOID = "ellipsoid"
-    DIAMOND = "diamond"  # If you want to keep the diamond shape
+    DIAMOND = "diamond"
 
 class TFWidget:
-    # Base widget class with common functionality
     def __init__(self, widget_type, center_intensity=128, center_gradient=128, 
                  opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max'):
         self.widget_type = widget_type
@@ -18,14 +17,13 @@ class TFWidget:
         self.center_gradient = center_gradient
         self.opacity = opacity
         self.color = color
-        self.blend_mode = blend_mode  # 'max', 'add', 'multiply'
+        self.blend_mode = blend_mode
         self.selected = False
         
     def calculate_opacity(self, intensity, gradient):
         raise NotImplementedError
         
     def get_parameters(self):
-        """Return comprehensive parameters for UI controls"""
         return {
             "center_intensity": {"value": self.center_intensity, "range": (0, 255), "type": "slider", "step": 1},
             "center_gradient": {"value": self.center_gradient, "range": (0, 255), "type": "slider", "step": 1},
@@ -34,13 +32,12 @@ class TFWidget:
         }
         
     def set_parameter(self, name, value):
-        """Update a parameter value"""
         if name == "center_intensity":
-            self.center_intensity = int(value)
+            self.center_intensity = max(0, min(255, int(value)))
         elif name == "center_gradient":
-            self.center_gradient = int(value)
+            self.center_gradient = max(0, min(255, int(value)))
         elif name == "opacity":
-            self.opacity = float(value)
+            self.opacity = max(0.0, min(1.0, float(value)))
         elif name == "blend_mode":
             self.blend_mode = value
 
@@ -49,15 +46,22 @@ class GaussianWidget(TFWidget):
                  intensity_std=30, gradient_std=30, falloff_power=2.0,
                  opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max'):
         super().__init__(WidgetType.GAUSSIAN, center_intensity, center_gradient, opacity, color, blend_mode)
-        self.intensity_std = intensity_std
-        self.gradient_std = gradient_std
-        self.falloff_power = falloff_power  # For shader optimization later
+        self.intensity_std = max(1, intensity_std)  # Prevent division by zero
+        self.gradient_std = max(1, gradient_std)
+        self.falloff_power = falloff_power
         
     def calculate_opacity(self, intensity, gradient):
-        dx = (intensity - self.center_intensity) / max(1, self.intensity_std)
-        dy = (gradient - self.center_gradient) / max(1, self.gradient_std)
+        # Early exit if too far from center (optimization)
+        if (abs(intensity - self.center_intensity) > 3 * self.intensity_std or
+            abs(gradient - self.center_gradient) > 3 * self.gradient_std):
+            return 0.0
+            
+        dx = (intensity - self.center_intensity) / self.intensity_std
+        dy = (gradient - self.center_gradient) / self.gradient_std
         distance_sq = dx*dx + dy*dy
-        return self.opacity * np.exp(-distance_sq / 2)
+        
+        # Clamp to avoid numerical issues
+        return self.opacity * np.exp(-min(distance_sq / 2, 100))
     
     def get_parameters(self):
         base_params = super().get_parameters()
@@ -71,43 +75,48 @@ class GaussianWidget(TFWidget):
     def set_parameter(self, name, value):
         super().set_parameter(name, value)
         if name == "intensity_std":
-            self.intensity_std = int(value)
+            self.intensity_std = max(1, int(value))  # Minimum 1 to avoid division by zero
         elif name == "gradient_std":
-            self.gradient_std = int(value)
+            self.gradient_std = max(1, int(value))
         elif name == "falloff_power":
-            self.falloff_power = float(value)
+            self.falloff_power = max(0.1, float(value))
 
 class TriangularWidget(TFWidget):
     def __init__(self, center_intensity=128, center_gradient=128, 
-                 intensity_width=50, gradient_height=50, direction='up',
+                 intensity_width=50, gradient_height=50, direction='symmetric',
                  opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max'):
         super().__init__(WidgetType.TRIANGULAR, center_intensity, center_gradient, opacity, color, blend_mode)
-        self.intensity_width = intensity_width
-        self.gradient_height = gradient_height
-        self.direction = direction  # 'up', 'down', 'left', 'right'
+        self.intensity_width = max(1, intensity_width)
+        self.gradient_height = max(1, gradient_height)
+        self.direction = direction
         
     def calculate_opacity(self, intensity, gradient):
-        dx = abs(intensity - self.center_intensity) / max(1, self.intensity_width / 2)
-        dy = abs(gradient - self.center_gradient) / max(1, self.gradient_height)
+        # Calculate normalized distances from center
+        dx = abs(intensity - self.center_intensity) / (self.intensity_width / 2)
+        dy = abs(gradient - self.center_gradient) / (self.gradient_height / 2)
         
-        # Triangle shape: opacity decreases linearly from center to edges
-        if dx > 1 or dy > 1:
-            return 0.0
-            
         if self.direction == 'up':
-            # Triangle pointing up - opacity decreases as gradient decreases
+            # Only affects points above center
             if gradient < self.center_gradient:
                 return 0.0
-            relative_height = (gradient - self.center_gradient) / max(1, self.gradient_height)
-            return self.opacity * (1 - dx) * relative_height
+            relative_height = (gradient - self.center_gradient) / (self.gradient_height / 2)
+            if dx > 1 or relative_height > 1:
+                return 0.0
+            return self.opacity * max(0, 1 - dx - relative_height)
+            
         elif self.direction == 'down':
-            # Triangle pointing down - opacity decreases as gradient increases  
+            # Only affects points below center
             if gradient > self.center_gradient:
                 return 0.0
-            relative_height = (self.center_gradient - gradient) / max(1, self.gradient_height)
-            return self.opacity * (1 - dx) * relative_height
-        else:
-            # Default: symmetric triangle (both directions)
+            relative_height = (self.center_gradient - gradient) / (self.gradient_height / 2)
+            if dx > 1 or relative_height > 1:
+                return 0.0
+            return self.opacity * max(0, 1 - dx - relative_height)
+            
+        else:  # symmetric (default)
+            # Classic diamond-like triangular shape
+            if dx + dy > 1:
+                return 0.0
             return self.opacity * max(0, 1 - dx - dy)
     
     def get_parameters(self):
@@ -122,9 +131,9 @@ class TriangularWidget(TFWidget):
     def set_parameter(self, name, value):
         super().set_parameter(name, value)
         if name == "intensity_width":
-            self.intensity_width = int(value)
+            self.intensity_width = max(1, int(value))
         elif name == "gradient_height":
-            self.gradient_height = int(value)
+            self.gradient_height = max(1, int(value))
         elif name == "direction":
             self.direction = value
 
@@ -133,13 +142,16 @@ class RectangularWidget(TFWidget):
                  intensity_width=40, gradient_height=40, 
                  opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max'):
         super().__init__(WidgetType.RECTANGULAR, center_intensity, center_gradient, opacity, color, blend_mode)
-        self.intensity_width = intensity_width
-        self.gradient_height = gradient_height
+        self.intensity_width = max(1, intensity_width)
+        self.gradient_height = max(1, gradient_height)
         
     def calculate_opacity(self, intensity, gradient):
-        # Uniform opacity within rectangle, 0 outside
-        if (abs(intensity - self.center_intensity) <= self.intensity_width / 2 and
-            abs(gradient - self.center_gradient) <= self.gradient_height / 2):
+        # Simple rectangular region - uniform opacity inside, 0 outside
+        half_width = self.intensity_width / 2
+        half_height = self.gradient_height / 2
+        
+        if (abs(intensity - self.center_intensity) <= half_width and
+            abs(gradient - self.center_gradient) <= half_height):
             return self.opacity
         return 0.0
     
@@ -154,28 +166,32 @@ class RectangularWidget(TFWidget):
     def set_parameter(self, name, value):
         super().set_parameter(name, value)
         if name == "intensity_width":
-            self.intensity_width = int(value)
+            self.intensity_width = max(1, int(value))
         elif name == "gradient_height":
-            self.gradient_height = int(value)
-
+            self.gradient_height = max(1, int(value))
 
 class EllipsoidWidget(TFWidget):
     def __init__(self, center_intensity=128, center_gradient=128,
                  intensity_radius=30, gradient_radius=30,
                  falloff_power=1.0, opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max'):
         super().__init__(WidgetType.ELLIPSOID, center_intensity, center_gradient, opacity, color, blend_mode)
-        self.intensity_radius = intensity_radius
-        self.gradient_radius = gradient_radius
+        self.intensity_radius = max(1, intensity_radius)
+        self.gradient_radius = max(1, gradient_radius)
         self.falloff_power = falloff_power
         
     def calculate_opacity(self, intensity, gradient):
-        dx = (intensity - self.center_intensity) / max(1, self.intensity_radius)
-        dy = (gradient - self.center_gradient) / max(1, self.gradient_radius)
+        # Early exit optimization
+        if (abs(intensity - self.center_intensity) > self.intensity_radius or
+            abs(gradient - self.center_gradient) > self.gradient_radius):
+            return 0.0
+            
+        dx = (intensity - self.center_intensity) / self.intensity_radius
+        dy = (gradient - self.center_gradient) / self.gradient_radius
         distance = (dx**2 + dy**2) ** 0.5
         
         if distance > 1:
             return 0.0
-        return self.opacity * (1 - distance ** self.falloff_power)
+        return self.opacity * max(0, 1 - distance ** self.falloff_power)
     
     def get_parameters(self):
         base_params = super().get_parameters()
@@ -189,28 +205,32 @@ class EllipsoidWidget(TFWidget):
     def set_parameter(self, name, value):
         super().set_parameter(name, value)
         if name == "intensity_radius":
-            self.intensity_radius = int(value)
+            self.intensity_radius = max(1, int(value))
         elif name == "gradient_radius":
-            self.gradient_radius = int(value)
+            self.gradient_radius = max(1, int(value))
         elif name == "falloff_power":
-            self.falloff_power = float(value)
+            self.falloff_power = max(0.1, float(value))
 
 class DiamondWidget(TFWidget):
     def __init__(self, center_intensity=128, center_gradient=128,
                  intensity_width=50, gradient_height=50,
                  opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max'):
         super().__init__(WidgetType.DIAMOND, center_intensity, center_gradient, opacity, color, blend_mode)
-        self.intensity_width = intensity_width
-        self.gradient_height = gradient_height
+        self.intensity_width = max(1, intensity_width)
+        self.gradient_height = max(1, gradient_height)
         
     def calculate_opacity(self, intensity, gradient):
-        dx = abs(intensity - self.center_intensity) / max(1, self.intensity_width / 2)
-        dy = abs(gradient - self.center_gradient) / max(1, self.gradient_height / 2)
+        # Early exit optimization
+        if (abs(intensity - self.center_intensity) > self.intensity_width / 2 or
+            abs(gradient - self.center_gradient) > self.gradient_height / 2):
+            return 0.0
+            
+        dx = abs(intensity - self.center_intensity) / (self.intensity_width / 2)
+        dy = abs(gradient - self.center_gradient) / (self.gradient_height / 2)
         
-        # Diamond shape: opacity decreases when moving away from center in any direction
         if dx + dy > 1:
             return 0.0
-        return self.opacity * (1 - (dx + dy))
+        return self.opacity * max(0, 1 - (dx + dy))
     
     def get_parameters(self):
         base_params = super().get_parameters()
@@ -223,42 +243,34 @@ class DiamondWidget(TFWidget):
     def set_parameter(self, name, value):
         super().set_parameter(name, value)
         if name == "intensity_width":
-            self.intensity_width = int(value)
+            self.intensity_width = max(1, int(value))
         elif name == "gradient_height":
-            self.gradient_height = int(value)
-
+            self.gradient_height = max(1, int(value))
 
 class WidgetFactory:
     @staticmethod
     def create_widget(widget_type, **kwargs):
-        # Extract preset first (if provided)
         preset_name = kwargs.pop('preset', None)
-        
-        # Get preset configuration
         preset_config = WidgetFactory.get_preset(widget_type, preset_name)
-        
-        # Merge preset config with any custom kwargs (custom kwargs override preset)
         config = {**preset_config, **kwargs}
         
-        # Create widget with merged configuration
         if widget_type == WidgetType.GAUSSIAN:
             return GaussianWidget(**config)
         elif widget_type == WidgetType.TRIANGULAR:
             return TriangularWidget(**config)
         elif widget_type == WidgetType.RECTANGULAR:
-            return RectangularWidget(**kwargs)
+            return RectangularWidget(**config)
         elif widget_type == WidgetType.ELLIPSOID:
-            return EllipsoidWidget(**kwargs)
+            return EllipsoidWidget(**config)
         elif widget_type == WidgetType.DIAMOND:
-            return DiamondWidget(**kwargs) 
+            return DiamondWidget(**config)
         else:
             raise ValueError(f"Unknown widget type: {widget_type}")
     
     @staticmethod
     def get_preset(widget_type, preset_name):
-        """Get predefined configurations for common use cases"""
         if preset_name is None:
-            return {}  # No preset, return empty config
+            return {}
             
         presets = {
             WidgetType.GAUSSIAN: {
@@ -276,12 +288,6 @@ class WidgetFactory:
                     'center_intensity': 80, 'center_gradient': 180,
                     'intensity_std': 10, 'gradient_std': 8, 'opacity': 0.7,
                     'color': (1.0, 0.8, 0.8)
-                }
-            },
-            WidgetType.TRIANGULAR: {
-                'low_freq': {
-                    'center_intensity': 50, 'center_gradient': 50,
-                    'intensity_width': 80, 'gradient_width': 80, 'opacity': 0.5
                 }
             }
         }
