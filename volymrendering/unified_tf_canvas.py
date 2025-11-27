@@ -104,30 +104,53 @@ class UnifiedTFCanvas(BaseTransferFunction):
         
     
     def sample_for_vtk(self, num_samples=256):
-        """Sample with explicit zero regions"""
-        # Create a dense sampling across entire range
-        samples = []
+        """Proper 2D sampling that respects widget height"""
+        # Get the ACTUAL gradient distribution from your data
+        if hasattr(self, 'gradient_normalized'):
+            # Use the real gradient values from your volume data
+            unique_gradients = np.unique(self.gradient_normalized.astype(int))
+            # Sample representative gradients (every 10th to keep it fast)
+            data_gradients = unique_gradients[::len(unique_gradients)//20 + 1]
+        else:
+            # Fallback
+            data_gradients = list(range(0, 256, 10))
     
-        for intensity in range(0, 256, 1):  # Sample every intensity
-            max_opacity = 0.0
-            dominant_color = (1.0, 1.0, 1.0)
-        
-            # Check ALL widgets for contribution at this intensity
-            for widget in self.widgets:
-                # Sample at widget's gradient position and nearby
-                for gradient_offset in [-10, 0, 10]:
-                    gradient = max(0, min(255, widget.center_gradient + gradient_offset))
-                    opacity = widget.calculate_opacity(intensity, gradient)
-                    if opacity > max_opacity:
-                        max_opacity = opacity
-                        dominant_color = widget.color
-        
-            # CRITICAL: If no widget contributes significant opacity, set to zero
-            if max_opacity < 0.01:
-                samples.append((intensity, 0.0, (1,1,1)))  # Explicit zero
-            else:
-                samples.append((intensity, max_opacity, dominant_color))
+        print(f"📊 Sampling at gradients: {len(data_gradients)} points from data")
     
+        # For each intensity, we need to consider which GRADIENTS actually exist there
+        intensity_opacity = np.zeros(256)
+        intensity_color = np.ones((256, 3))
+    
+        for widget in self.widgets:
+            # For each ACTUAL gradient in our data...
+            for data_gradient in data_gradients:
+                # Check if this widget affects THIS SPECIFIC gradient
+                widget_opacity = widget.calculate_opacity(widget.center_intensity, data_gradient)
+            
+                if widget_opacity > 0:
+                    # This widget affects data at this gradient!
+                    # Now find which intensities get affected at this gradient
+                    if widget.widget_type == WidgetType.RECTANGULAR:
+                        intensity_range = (
+                            max(0, int(widget.center_intensity - widget.intensity_width/2)),
+                            min(255, int(widget.center_intensity + widget.intensity_width/2))
+                        )
+                    elif widget.widget_type == WidgetType.GAUSSIAN:
+                        intensity_range = (
+                            max(0, int(widget.center_intensity - 3 * widget.intensity_std)),
+                            min(255, int(widget.center_intensity + 3 * widget.intensity_std))
+                        )
+                    else:
+                        intensity_range = (max(0, widget.center_intensity-25), min(255, widget.center_intensity+25))
+                
+                    # Apply the widget to intensities in its range
+                    for intensity in range(intensity_range[0], intensity_range[1] + 1):
+                        opacity = widget.calculate_opacity(intensity, data_gradient)
+                        if opacity > intensity_opacity[intensity]:
+                            intensity_opacity[intensity] = opacity
+                            intensity_color[intensity] = widget.color
+    
+        samples = [(i, intensity_opacity[i], tuple(intensity_color[i])) for i in range(256)]
         return samples
     
     def _draw(self):
@@ -208,8 +231,8 @@ class UnifiedTFCanvas(BaseTransferFunction):
         from matplotlib.patches import Rectangle
     
         rect = Rectangle(
-            (widget.center_intensity - widget.intensity_width/2, 
-             widget.center_gradient - widget.gradient_height/2),
+            (widget.center_intensity - widget.intensity_width/2.0, 
+             widget.center_gradient - widget.gradient_height/2.0),
             widget.intensity_width, 
             widget.gradient_height,
             fill=False, 
@@ -225,8 +248,8 @@ class UnifiedTFCanvas(BaseTransferFunction):
     
         ellipse = Ellipse(
             (widget.center_intensity, widget.center_gradient),
-            width=widget.intensity_radius * 2,
-            height=widget.gradient_radius * 2,
+            width=widget.intensity_radius * 2.0,
+            height=widget.gradient_radius * 2.0,
             fill=False, 
             edgecolor=color, 
             linewidth=linewidth, 

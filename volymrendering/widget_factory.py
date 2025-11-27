@@ -51,17 +51,12 @@ class GaussianWidget(TFWidget):
         self.falloff_power = falloff_power
         
     def calculate_opacity(self, intensity, gradient):
-        # Early exit if too far from center (optimization)
-        if (abs(intensity - self.center_intensity) > 3 * self.intensity_std or
-            abs(gradient - self.center_gradient) > 3 * self.gradient_std):
-            return 0.0
-            
+        # Proper 2D Gaussian
         dx = (intensity - self.center_intensity) / self.intensity_std
         dy = (gradient - self.center_gradient) / self.gradient_std
         distance_sq = dx*dx + dy*dy
         
-        # Clamp to avoid numerical issues
-        return self.opacity * np.exp(-min(distance_sq / 2, 100))
+        return self.opacity * np.exp(-distance_sq / 2)
     
     def get_parameters(self):
         base_params = super().get_parameters()
@@ -150,21 +145,19 @@ class RectangularWidget(TFWidget):
     def calculate_opacity(self, intensity, gradient):
         half_width = self.intensity_width / 2.0
         half_height = self.gradient_height / 2.0
-        
-        # Calculate distance from rectangle edges
-        dx = max(0, abs(intensity - self.center_intensity) - half_width)
-        dy = max(0, abs(gradient - self.center_gradient) - half_height)
-        
-        # If inside rectangle, full opacity
-        if dx == 0 and dy == 0:
-            return self.opacity
+    
+        # Calculate normalized distances (0 = at edge, 1 = at falloff distance)
+        dist_x = max(0, abs(intensity - self.center_intensity) - half_width) / max(1, self.falloff)
+        dist_y = max(0, abs(gradient - self.center_gradient) - half_height) / max(1, self.falloff)
+    
+        # Use the maximum distance (falloff works from any edge)
+        max_dist = max(dist_x, dist_y)
+    
+        if max_dist <= 1.0:  # Within falloff range
+            return self.opacity * (1 - max_dist)
+        else:
+            return 0.0
             
-        # If outside but within falloff, gradual decrease
-        distance = (dx**2 + dy**2) ** 0.5
-        if distance <= self.falloff:
-            return self.opacity * (1 - distance / self.falloff)
-            
-        return 0.0
     
     def get_parameters(self):
         base_params = super().get_parameters()

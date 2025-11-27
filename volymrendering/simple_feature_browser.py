@@ -1,102 +1,147 @@
-﻿# simple_matrix_browser.py
+﻿# simple_feature_browser.py
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
-from unified_tf_canvas import UnifiedTFCanvas  # YOUR EXISTING CANVAS!
+from PyQt5.QtCore import Qt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
 
 class SimpleMatrixBrowser(QtWidgets.QWidget):
-    def __init__(self, feature_data_dict, update_callback=None):
-        """
-        feature_data_dict: {feature_name: normalized_data}
-        Uses YOUR existing UnifiedTFCanvas for each cell!
-        """
-        super().__init__()
+    def __init__(self, feature_data_dict, update_callback, parent=None):
+        super().__init__(parent)
         self.feature_data = feature_data_dict
         self.update_callback = update_callback
         self.feature_names = list(feature_data_dict.keys())
-        self.canvases = {}  # (i,j) -> YOUR UnifiedTFCanvas
         
         self.setup_ui()
-        self.build_matrix()
-    
+        
     def setup_ui(self):
-        """Simple matrix UI using your existing canvas components"""
-        self.main_layout = QtWidgets.QVBoxLayout()
+        layout = QtWidgets.QVBoxLayout(self)
         
         # Title
-        title = QtWidgets.QLabel(f"Feature Matrix - Click any cell to explore")
-        title.setStyleSheet("font-weight: bold; color: darkblue;")
-        self.main_layout.addWidget(title)
+        title = QtWidgets.QLabel("nD Feature Matrix")
+        title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2E86AB;")
+        layout.addWidget(title)
         
-        # Matrix container
-        self.matrix_container = QtWidgets.QWidget()
-        self.matrix_layout = QtWidgets.QGridLayout()
-        self.matrix_container.setLayout(self.matrix_layout)
+        # Description
+        desc = QtWidgets.QLabel("Click any cell to explore that feature pair")
+        desc.setStyleSheet("color: #666; font-size: 11px;")
+        layout.addWidget(desc)
         
-        # Scroll area for large matrices
-        self.scroll_area = QtWidgets.QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setWidget(self.matrix_container)
-        self.scroll_area.setMinimumSize(700, 500)
+        # Create matrix grid
+        self.matrix_widget = QtWidgets.QWidget()
+        matrix_layout = QtWidgets.QGridLayout(self.matrix_widget)
+        matrix_layout.setSpacing(2)
         
-        self.main_layout.addWidget(self.scroll_area)
-        self.setLayout(self.main_layout)
-    
-    def build_matrix(self):
-        """Build matrix using YOUR existing UnifiedTFCanvas for each cell"""
-        n = len(self.feature_names)
-        print(f"🔄 Building {n}x{n} feature matrix...")
+        # Create headers and cells
+        n_features = len(self.feature_names)
         
-        # Column headers
-        for j in range(1, n):
-            header = QtWidgets.QLabel(self.feature_names[j])
-            header.setAlignment(QtCore.Qt.AlignCenter)
-            header.setStyleSheet("font-weight: bold; background: #e0e0e0; padding: 2px;")
-            self.matrix_layout.addWidget(header, 0, j)
+        # Column headers (x-axis features)
+        for col, feat_x in enumerate(self.feature_names):
+            label = QtWidgets.QLabel(feat_x)
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("font-weight: bold; background: #4A6572; color: white; padding: 5px;")
+            matrix_layout.addWidget(label, 0, col + 1)
         
-        # Row labels and YOUR canvases
-        for i in range(n - 1):
-            # Row label
-            row_label = QtWidgets.QLabel(self.feature_names[i])
-            row_label.setAlignment(QtCore.Qt.AlignCenter)
-            row_label.setStyleSheet("font-weight: bold; background: #e0e0e0; padding: 2px;")
-            self.matrix_layout.addWidget(row_label, i + 1, 0)
+        # Row headers (y-axis features) and cells
+        for row, feat_y in enumerate(self.feature_names):
+            # Row header
+            label = QtWidgets.QLabel(feat_y)
+            label.setAlignment(Qt.AlignCenter) 
+            label.setStyleSheet("font-weight: bold; background: #4A6572; color: white; padding: 5px;")
+            matrix_layout.addWidget(label, row + 1, 0)
             
-            # YOUR UnifiedTFCanvas for each feature pair
-            for j in range(i + 1, n):
-                canvas = self.create_matrix_cell(i, j)
-                self.canvases[(i, j)] = canvas
-                self.matrix_layout.addWidget(canvas, i + 1, j)
+            # Matrix cells
+            for col, feat_x in enumerate(self.feature_names):
+                if feat_x == feat_y:
+                    # Diagonal - show feature histogram
+                    cell = self.create_histogram_cell(feat_x)
+                else:
+                    # Off-diagonal - show 2D scatter
+                    cell = self.create_scatter_cell(feat_x, feat_y)
+                
+                matrix_layout.addWidget(cell, row + 1, col + 1)
         
-        print(f"✅ Matrix built with {len(self.canvases)} feature pairs")
-    
-    def create_matrix_cell(self, idx_i, idx_j):
-        """Create a matrix cell using YOUR UnifiedTFCanvas"""
-        feature_x = self.feature_names[idx_i]
-        feature_y = self.feature_names[idx_j]
+        layout.addWidget(self.matrix_widget)
         
-        # USE YOUR EXISTING UNIFIEDTFCANVAS!
-        canvas = UnifiedTFCanvas(
-            tf_type='2d',
-            data=self.feature_data[feature_x],
-            gradient_data=self.feature_data[feature_y],
-            update_callback=lambda: self.on_cell_click(feature_x, feature_y)
-        )
+    def create_histogram_cell(self, feature_name):
+        """Create a cell showing feature histogram (diagonal)"""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
         
-        # Smaller size for matrix cells
-        canvas.setMinimumSize(150, 150)
-        canvas.setMaximumSize(200, 200)
+        # Create matplotlib figure
+        fig = Figure(figsize=(1.2, 1.2), dpi=100)
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
         
-        # Update labels to show feature names
-        canvas.ax.set_xlabel(feature_x, fontsize=6)
-        canvas.ax.set_ylabel(feature_y, fontsize=6)
-        canvas.ax.set_title(f'{feature_x} vs {feature_y}', fontsize=7)
-        canvas.ax.tick_params(labelsize=5)
-        canvas.draw()
+        data = self.feature_data[feature_name]
+        hist, bins = np.histogram(data, bins=30)
+        ax.fill_between(bins[:-1], hist, color='#3498db', alpha=0.7)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.spines['left'].set_visible(False)
         
-        return canvas
-    
-    def on_cell_click(self, feature_x, feature_y):
-        """When user interacts with a matrix cell"""
-        print(f"🎯 Matrix cell clicked: {feature_x} vs {feature_y}")
+        layout.addWidget(canvas)
+        
+        # Make clickable
+        widget.mousePressEvent = lambda e: self.on_cell_clicked(feature_name, feature_name)
+        widget.setToolTip(f"Click to view {feature_name} histogram in main TF")
+        
+        return widget
+        
+    def create_scatter_cell(self, feat_x, feat_y):
+        """Create a cell showing 2D scatter plot (off-diagonal)"""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
+        
+        # Create matplotlib figure
+        fig = Figure(figsize=(1.2, 1.2), dpi=100)
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+        
+        data_x = self.feature_data[feat_x]
+        data_y = self.feature_data[feat_y]
+        
+        # Sample for performance
+        if len(data_x) > 1000:
+            indices = np.random.choice(len(data_x), 1000, replace=False)
+            data_x = data_x[indices]
+            data_y = data_y[indices]
+            
+        ax.scatter(data_x, data_y, s=1, alpha=0.6, color='#3498db')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        
+        layout.addWidget(canvas)
+        
+        # Make clickable
+        widget.mousePressEvent = lambda e: self.on_cell_clicked(feat_x, feat_y)
+        widget.setToolTip(f"Click to explore {feat_x} vs {feat_y} in main TF")
+        
+        return widget
+        
+    def on_cell_clicked(self, feat_x, feat_y):
+        """Handle cell clicks"""
+        print(f"🎯 Matrix cell clicked: {feat_x} vs {feat_y}")
         if self.update_callback:
-            self.update_callback(feature_x, feature_y)
+            self.update_callback(feat_x, feat_y)
+            
+    def update_matrix(self):
+        """Update matrix with new feature data"""
+        # Remove old matrix
+        old_matrix = self.matrix_widget
+        self.matrix_widget = QtWidgets.QWidget()
+        self.layout().replaceWidget(old_matrix, self.matrix_widget)
+        old_matrix.deleteLater()
+        
+        # Create new matrix
+        self.setup_ui()
