@@ -1,15 +1,32 @@
-# widget_manager_ui.py
+﻿# widget_manager_ui.py
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import Qt
 from widget_factory import WidgetFactory, WidgetType
 
 class WidgetManager(QtWidgets.QWidget):
-    def __init__(self, tf_canvas):
-        super().__init__()
-        self.tf_canvas = tf_canvas
-        self.current_widget = None
-        self.param_controls = {}
-        self.setup_ui()
+    def __init__(self, tf_canvas, parent=None):
+        super().__init__(parent)
+        try:
+            self.tf_canvas = tf_canvas
+            self.current_widget = None
+            self.param_controls = {}
+        
+            # Verify we have a valid canvas
+            if not hasattr(self.tf_canvas, 'widgets'):
+                print("⚠️ Warning: tf_canvas may not be properly initialized")
+            
+            self.setup_ui()
+            self.update_widget_list()
+        
+            print(f"✅ WidgetManager ready with {len(self.tf_canvas.widgets) if hasattr(self.tf_canvas, 'widgets') else 'unknown'} widgets")
+        
+        except Exception as e:
+            print(f"❌ Error initializing WidgetManager: {e}")
+            # Create a fallback UI even if initialization fails
+            error_label = QtWidgets.QLabel(f"Widget Manager Error: {str(e)}")
+            layout = QtWidgets.QVBoxLayout()
+            layout.addWidget(error_label)
+            self.setLayout(layout)
         
     def setup_ui(self):
         layout = QtWidgets.QVBoxLayout()

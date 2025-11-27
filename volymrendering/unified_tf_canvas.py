@@ -96,61 +96,109 @@ class UnifiedTFCanvas(BaseTransferFunction):
             return True
         return False
             
-    def clear_widgets(self):  # ← THIS WAS MISSING!
-        """Remove all widgets"""
-        self.widgets.clear()
-        self._draw()
-        self._notify_app()
+    def clear_widgets(self):
+        """Remove all widgets safely without crashes"""
+        try:
+            # Store count for debugging
+            widget_count = len(self.widgets)
+        
+            # Clear the list
+            self.widgets.clear()
+        
+            # Redraw canvas
+            self._draw()
+        
+            # Notify application
+            self._notify_app()
+        
+            print(f"✅ Cleared {widget_count} widgets safely")
+        
+        except Exception as e:
+            print(f"❌ Error clearing widgets: {e}")
+            import traceback
+            traceback.print_exc()
         
     
-    def sample_for_vtk(self, num_samples=256):
-        """Proper 2D sampling that respects widget height"""
-        # Get the ACTUAL gradient distribution from your data
-        if hasattr(self, 'gradient_normalized'):
-            # Use the real gradient values from your volume data
-            unique_gradients = np.unique(self.gradient_normalized.astype(int))
-            # Sample representative gradients (every 10th to keep it fast)
-            data_gradients = unique_gradients[::len(unique_gradients)//20 + 1]
-        else:
-            # Fallback
-            data_gradients = list(range(0, 256, 10))
-    
-        print(f"📊 Sampling at gradients: {len(data_gradients)} points from data")
-    
-        # For each intensity, we need to consider which GRADIENTS actually exist there
+    def sample_for_vtk(self):
+        """Fixed 2D sampling that respects gradient positioning"""
+        #return self.sample_for_vtk_gradient_aware()  # Use the gradient-aware version
+        return self.sample_for_vtk_data_driven()
+
+    def sample_for_vtk_gradient_aware(self):
+        """Make gradient height matter by being specific about gradient values"""
         intensity_opacity = np.zeros(256)
         intensity_color = np.ones((256, 3))
     
         for widget in self.widgets:
-            # For each ACTUAL gradient in our data...
-            for data_gradient in data_gradients:
-                # Check if this widget affects THIS SPECIFIC gradient
-                widget_opacity = widget.calculate_opacity(widget.center_intensity, data_gradient)
+            # Determine the ACTUAL gradient range this widget should affect
+            if hasattr(widget, 'gradient_height'):
+                gradient_center = widget.center_gradient
+                gradient_range = (
+                    max(0, gradient_center - widget.gradient_height//2),
+                    min(255, gradient_center + widget.gradient_height//2)
+                )
+            else:
+                # For widgets without height, use a small range around center
+                gradient_range = (widget.center_gradient, widget.center_gradient)
+        
+            print(f"🎯 Widget {widget.widget_type.value}: gradient range {gradient_range}")
+        
+            # Only apply widget to intensities if the data has gradients in this range
+            if hasattr(self, 'gradient_data'):
+                # Check if any data actually exists in this gradient range
+                data_in_range = np.sum((self.gradient_data >= gradient_range[0]) & 
+                                     (self.gradient_data <= gradient_range[1]))
             
-                if widget_opacity > 0:
-                    # This widget affects data at this gradient!
-                    # Now find which intensities get affected at this gradient
-                    if widget.widget_type == WidgetType.RECTANGULAR:
-                        intensity_range = (
-                            max(0, int(widget.center_intensity - widget.intensity_width/2)),
-                            min(255, int(widget.center_intensity + widget.intensity_width/2))
-                        )
-                    elif widget.widget_type == WidgetType.GAUSSIAN:
-                        intensity_range = (
-                            max(0, int(widget.center_intensity - 3 * widget.intensity_std)),
-                            min(255, int(widget.center_intensity + 3 * widget.intensity_std))
-                        )
-                    else:
-                        intensity_range = (max(0, widget.center_intensity-25), min(255, widget.center_intensity+25))
-                
-                    # Apply the widget to intensities in its range
-                    for intensity in range(intensity_range[0], intensity_range[1] + 1):
-                        opacity = widget.calculate_opacity(intensity, data_gradient)
+                if data_in_range > 0:
+                    # Apply widget to its intensity range
+                    intensity_range = self._get_widget_intensity_range(widget)
+                    for intensity in intensity_range:
+                        # Use opacity at the CENTER gradient (simpler but effective)
+                        opacity = widget.calculate_opacity(intensity, widget.center_gradient)
                         if opacity > intensity_opacity[intensity]:
                             intensity_opacity[intensity] = opacity
                             intensity_color[intensity] = widget.color
     
-        samples = [(i, intensity_opacity[i], tuple(intensity_color[i])) for i in range(256)]
+        return self._create_vtk_samples(intensity_opacity, intensity_color)
+
+    def sample_for_vtk_data_driven(self):
+        """Sample based on actual data points - TRUE 2D behavior"""
+        intensity_opacity = np.zeros(256)
+        intensity_color = np.ones((256, 3))
+    
+        if not hasattr(self, 'data') or not hasattr(self, 'gradient_data'):
+            return self._create_vtk_samples(intensity_opacity, intensity_color)
+    
+        # Sample a subset of data points for performance
+        sample_size = min(5000, len(self.data))
+        indices = np.random.choice(len(self.data), sample_size, replace=False)
+    
+        print(f"📊 Sampling {sample_size} data points for 2D TF")
+    
+        for widget in self.widgets:
+            print(f"🎯 Processing {widget.widget_type.value} widget...")
+        
+            # For each data point, check if widget affects it
+            for idx in indices:
+                data_intensity = int(self.data[idx])
+                data_gradient = self.gradient_data[idx]
+            
+                # Calculate if widget affects this specific data point
+                opacity = widget.calculate_opacity(data_intensity, data_gradient)
+            
+                if opacity > 0.01:  # Widget affects this data point
+                    if opacity > intensity_opacity[data_intensity]:
+                        intensity_opacity[data_intensity] = opacity
+                        intensity_color[data_intensity] = widget.color
+    
+        return self._create_vtk_samples(intensity_opacity, intensity_color)
+
+    def _create_vtk_samples(self, intensity_opacity, intensity_color):
+        """Convert arrays to VTK sample format"""
+        samples = []
+        for intensity in range(256):
+            samples.append((intensity, intensity_opacity[intensity], 
+                           tuple(intensity_color[intensity])))
         return samples
     
     def _draw(self):
