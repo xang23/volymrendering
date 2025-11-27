@@ -104,55 +104,30 @@ class UnifiedTFCanvas(BaseTransferFunction):
         
     
     def sample_for_vtk(self, num_samples=256):
-        """Sample at ACTUAL widget positions"""
+        """Sample with explicit zero regions"""
+        # Create a dense sampling across entire range
         samples = []
     
-        print(f"🎯 Sampling at actual widget positions")
-    
-        if not self.widgets:
-            return [(0, 0.0, (1,1,1)), (255, 0.0, (1,1,1))]
-    
-        # For each widget, sample along intensity axis at its gradient position
-        for widget in self.widgets:
-            gradient = widget.center_gradient
+        for intensity in range(0, 256, 1):  # Sample every intensity
+            max_opacity = 0.0
+            dominant_color = (1.0, 1.0, 1.0)
         
-            # Calculate the intensity range this widget affects
-            if widget.widget_type == WidgetType.RECTANGULAR:
-                start_x = max(0, widget.center_intensity - widget.intensity_width/2.0)
-                end_x = min(255, widget.center_intensity + widget.intensity_width/2.0)
-            elif widget.widget_type == WidgetType.GAUSSIAN:
-                # Gaussian affects wider range
-                start_x = max(0, widget.center_intensity - 3 * widget.intensity_std)
-                end_x = min(255, widget.center_intensity + 3 * widget.intensity_std)
+            # Check ALL widgets for contribution at this intensity
+            for widget in self.widgets:
+                # Sample at widget's gradient position and nearby
+                for gradient_offset in [-10, 0, 10]:
+                    gradient = max(0, min(255, widget.center_gradient + gradient_offset))
+                    opacity = widget.calculate_opacity(intensity, gradient)
+                    if opacity > max_opacity:
+                        max_opacity = opacity
+                        dominant_color = widget.color
+        
+            # CRITICAL: If no widget contributes significant opacity, set to zero
+            if max_opacity < 0.01:
+                samples.append((intensity, 0.0, (1,1,1)))  # Explicit zero
             else:
-                # Other widgets - use reasonable range
-                start_x = max(0, widget.center_intensity - 50)
-                end_x = min(255, widget.center_intensity + 50)
-        
-            # Sample this range
-            for intensity in range(int(start_x), int(end_x) + 1):
-                opacity = widget.calculate_opacity(intensity, gradient)
-                if opacity > 0.001:
-                    samples.append((intensity, opacity, widget.color))
+                samples.append((intensity, max_opacity, dominant_color))
     
-        # Remove duplicates and ensure coverage
-        if samples:
-            # Remove duplicate intensities (keep highest opacity)
-            samples_dict = {}
-            for intensity, opacity, color in samples:
-                if intensity not in samples_dict or opacity > samples_dict[intensity][0]:
-                    samples_dict[intensity] = (opacity, color)
-        
-            samples = [(i, op, col) for i, (op, col) in samples_dict.items()]
-            samples.sort(key=lambda x: x[0])
-        
-            # Ensure complete coverage
-            if samples[0][0] > 0:
-                samples.insert(0, (0, 0.0, (1,1,1)))
-            if samples[-1][0] < 255:
-                samples.append((255, 0.0, (1,1,1)))
-    
-        print(f"📊 Generated {len(samples)} samples from widget positions")
         return samples
     
     def _draw(self):

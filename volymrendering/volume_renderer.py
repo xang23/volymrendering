@@ -42,20 +42,30 @@ class VolumeRenderer:
         print(f"VolumeRenderer {self.renderer_id} setup complete")
 
     def update_transfer_functions(self, points_x, points_y, colors, intensity_range):
-        """Update THIS instance's transfer functions."""
+        """COMPLETELY reset and rebuild transfer functions"""
         raw_int_min, raw_int_max = intensity_range
-        
-        # Clear old points from THIS instance
-        self.color_function.RemoveAllPoints()
-        self.opacity_function.RemoveAllPoints()
-
-        # Add new points to THIS instance
+    
+        # COMPLETELY recreate the functions to clear any residual state
+        self.color_function = vtk.vtkColorTransferFunction()
+        self.opacity_function = vtk.vtkPiecewiseFunction()
+    
+        # Always start with zero at minimum
+        self.opacity_function.AddPoint(raw_int_min, 0.0)
+        self.color_function.AddRGBPoint(raw_int_min, 1.0, 1.0, 1.0)
+    
+        # Add all the sampled points
         for x, y, c in zip(points_x, points_y, colors):
             abs_val = raw_int_min + (x / 255.0) * (raw_int_max - raw_int_min)
             self.opacity_function.AddPoint(abs_val, y)
             self.color_function.AddRGBPoint(abs_val, *c)
-            
-        print(f"Updated TF for {self.renderer_id} with {len(points_x)} points")
+    
+        # Always end with zero at maximum  
+        self.opacity_function.AddPoint(raw_int_max, 0.0)
+        self.color_function.AddRGBPoint(raw_int_max, 1.0, 1.0, 1.0)
+    
+        # Reassign to volume property (important!)
+        self.volume_property.SetColor(self.color_function)
+        self.volume_property.SetScalarOpacity(self.opacity_function)
 
     def set_volume_data(self, image_data, reader=None):
         """Set volume data for THIS instance."""
