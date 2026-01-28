@@ -120,85 +120,119 @@ class UnifiedTFCanvas(BaseTransferFunction):
         
     
     def sample_for_vtk(self):
-        """Fixed 2D sampling that respects gradient positioning"""
-        #return self.sample_for_vtk_gradient_aware()  # Use the gradient-aware version
-        return self.sample_for_vtk_data_driven()
+        """Main entry point for VTK sampling - properly handles both 1D and 2D"""
+        if self.tf_type == '1d':
+            return self._sample_1d_for_vtk()
+        else:  # 2D mode
+            return self._sample_2d_for_vtk_dual_functions()
 
-    def sample_for_vtk_gradient_aware(self):
-        """Make gradient height matter by being specific about gradient values"""
+    def _sample_1d_for_vtk(self):
+        """Sample 1D transfer function for VTK (KEEP your existing 1D logic)"""
         intensity_opacity = np.zeros(256)
         intensity_color = np.ones((256, 3))
     
         for widget in self.widgets:
-            # Determine the ACTUAL gradient range this widget should affect
-            if hasattr(widget, 'gradient_height'):
-                gradient_center = widget.center_gradient
-                gradient_range = (
-                    max(0, gradient_center - widget.gradient_height//2),
-                    min(255, gradient_center + widget.gradient_height//2)
-                )
+            intensity_range = self._get_widget_intensity_range(widget)
+            for intensity in intensity_range:
+                # Use gradient=0 for 1D mode
+                opacity = widget.calculate_opacity(intensity, 0)
+                if opacity > intensity_opacity[intensity]:
+                    intensity_opacity[intensity] = opacity
+                    intensity_color[intensity] = widget.color
+    
+        return self._create_vtk_samples(intensity_opacity, intensity_color)
+
+    def _sample_2d_for_vtk_dual_functions(self):
+        """NEW: Create dual 1D functions for VTK (scalar + gradient opacity)"""
+        # Create separate arrays for scalar and gradient influence
+        scalar_influence = np.zeros(256)  # Intensity -> opacity
+        gradient_influence = np.zeros(256)  # Gradient -> opacity  
+        color_influence = np.ones((256, 3))  # Intensity -> color
+    
+        print(f"🎯 Creating 2D TF with {len(self.widgets)} widgets")
+    
+        # Sample each widget's influence in 2D space
+        for widget_idx, widget in enumerate(self.widgets):
+            print(f"  Processing {widget.widget_type.value} widget...")
+        
+            # Determine widget's effective ranges
+            if hasattr(widget, 'intensity_width'):
+                intensity_min = max(0, int(widget.center_intensity - widget.intensity_width/2))
+                intensity_max = min(255, int(widget.center_intensity + widget.intensity_width/2))
             else:
-                # For widgets without height, use a small range around center
-                gradient_range = (widget.center_gradient, widget.center_gradient)
-        
-            print(f"🎯 Widget {widget.widget_type.value}: gradient range {gradient_range}")
-        
-            # Only apply widget to intensities if the data has gradients in this range
-            if hasattr(self, 'gradient_data'):
-                # Check if any data actually exists in this gradient range
-                data_in_range = np.sum((self.gradient_data >= gradient_range[0]) & 
-                                     (self.gradient_data <= gradient_range[1]))
+                intensity_min = 0
+                intensity_max = 255
             
-                if data_in_range > 0:
-                    # Apply widget to its intensity range
-                    intensity_range = self._get_widget_intensity_range(widget)
-                    for intensity in intensity_range:
-                        # Use opacity at the CENTER gradient (simpler but effective)
-                        opacity = widget.calculate_opacity(intensity, widget.center_gradient)
-                        if opacity > intensity_opacity[intensity]:
-                            intensity_opacity[intensity] = opacity
-                            intensity_color[intensity] = widget.color
+            if hasattr(widget, 'gradient_height'):
+                gradient_min = max(0, int(widget.center_gradient - widget.gradient_height/2))
+                gradient_max = min(255, int(widget.center_gradient + widget.gradient_height/2))
+            else:
+                gradient_min = 0
+                gradient_max = 255
+        
+            # For each intensity in widget's range, find max opacity across gradients
+            for intensity in range(intensity_min, intensity_max + 1):
+                max_opacity = 0
+                # Sample gradients within widget's range (step by 4 for speed)
+                for gradient in range(gradient_min, gradient_max + 1, 4):
+                    opacity = widget.calculate_opacity(intensity, gradient)
+                    max_opacity = max(max_opacity, opacity)
+            
+                if max_opacity > 0:
+                    # Apply blending
+                    if widget.blend_mode == 'max':
+                        if max_opacity > scalar_influence[intensity]:
+                            scalar_influence[intensity] = max_opacity
+                            color_influence[intensity] = widget.color
+                    elif widget.blend_mode == 'add':
+                        scalar_influence[intensity] += max_opacity
+                        # Blend colors based on contribution
+                        if max_opacity > 0:
+                            weight = max_opacity / (scalar_influence[intensity] + 1e-6)
+                            color_influence[intensity] = (
+                                weight * np.array(widget.color) + 
+                                (1 - weight) * color_influence[intensity]
+                            )
+        
+            # For each gradient in widget's range, find max opacity across intensities
+            for gradient in range(gradient_min, gradient_max + 1):
+                max_opacity = 0
+                for intensity in range(intensity_min, intensity_max + 1, 4):
+                    opacity = widget.calculate_opacity(intensity, gradient)
+                    max_opacity = max(max_opacity, opacity)
+            
+                if max_opacity > 0:
+                    if widget.blend_mode == 'max':
+                        gradient_influence[gradient] = max(
+                            gradient_influence[gradient], max_opacity
+                        )
+                    elif widget.blend_mode == 'add':
+                        gradient_influence[gradient] += max_opacity
     
-        return self._create_vtk_samples(intensity_opacity, intensity_color)
+        # Clamp values
+        scalar_influence = np.clip(scalar_influence, 0, 1)
+        gradient_influence = np.clip(gradient_influence, 0, 1)
+    
+        # Create VTK-compatible samples (format compatible with existing code)
+        return self._create_dual_function_samples(scalar_influence, gradient_influence, color_influence)
 
-    def sample_for_vtk_data_driven(self):
-        """Sample based on actual data points - TRUE 2D behavior"""
-        intensity_opacity = np.zeros(256)
-        intensity_color = np.ones((256, 3))
-    
-        if not hasattr(self, 'data') or not hasattr(self, 'gradient_data'):
-            return self._create_vtk_samples(intensity_opacity, intensity_color)
-    
-        # Sample a subset of data points for performance
-        sample_size = min(5000, len(self.data))
-        indices = np.random.choice(len(self.data), sample_size, replace=False)
-    
-        print(f"📊 Sampling {sample_size} data points for 2D TF")
-    
-        for widget in self.widgets:
-            print(f"🎯 Processing {widget.widget_type.value} widget...")
-        
-            # For each data point, check if widget affects it
-            for idx in indices:
-                data_intensity = int(self.data[idx])
-                data_gradient = self.gradient_data[idx]
-            
-                # Calculate if widget affects this specific data point
-                opacity = widget.calculate_opacity(data_intensity, data_gradient)
-            
-                if opacity > 0.01:  # Widget affects this data point
-                    if opacity > intensity_opacity[data_intensity]:
-                        intensity_opacity[data_intensity] = opacity
-                        intensity_color[data_intensity] = widget.color
-    
-        return self._create_vtk_samples(intensity_opacity, intensity_color)
-
-    def _create_vtk_samples(self, intensity_opacity, intensity_color):
-        """Convert arrays to VTK sample format"""
+    def _create_dual_function_samples(self, scalar_opacity, gradient_opacity, colors):
+        """Convert dual functions to VTK samples format"""
+        # Create samples in the SAME format as before for compatibility
         samples = []
-        for intensity in range(256):
-            samples.append((intensity, intensity_opacity[intensity], 
-                           tuple(intensity_color[intensity])))
+    
+        # Sample every 4th intensity for efficiency
+        for intensity in range(0, 256, 4):
+            opacity = scalar_opacity[intensity]
+            if opacity > 0.01:  # Only include significant points
+                samples.append((intensity, opacity, tuple(colors[intensity])))
+    
+        print(f"📊 Generated {len(samples)} samples for VTK")
+    
+        # ALSO store the gradient opacity separately if needed
+        if hasattr(self, '_cached_gradient_opacity'):
+            self._cached_gradient_opacity = gradient_opacity
+    
         return samples
     
     def _draw(self):
@@ -444,3 +478,14 @@ class UnifiedTFCanvas(BaseTransferFunction):
             else:
                 self.ax.set_ylim(0, 1)
             self.draw()
+
+    def _get_widget_intensity_range(self, widget):
+        """Get the intensity range affected by a widget"""
+        if hasattr(widget, 'intensity_width'):
+            min_int = max(0, int(widget.center_intensity - widget.intensity_width/2))
+            max_int = min(255, int(widget.center_intensity + widget.intensity_width/2))
+            return range(min_int, max_int + 1)
+        else:
+            # Default to widget center ±10
+            center = int(widget.center_intensity)
+            return range(max(0, center-10), min(255, center+10) + 1)

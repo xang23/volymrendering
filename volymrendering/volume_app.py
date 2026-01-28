@@ -543,30 +543,40 @@ class VolumeApp(QtWidgets.QMainWindow):
 
     def update_volume_from_widgets(self):
         """Update volume from widget-based TF"""
-        # Allow both 'widget' AND 'nd' modes to use widget rendering
         if self._active_tf_system not in ['widget', 'nd']:
-            return  # Skip if not active
-            
+            return
+    
+        # For point-based compatibility, use 'compatible' format
         samples = self.tf_canvas.sample_for_vtk()
+    
         if samples:
             intensities = [s[0] for s in samples]
             opacities = [s[1] for s in samples]
             colors = [s[2] for s in samples]
         
-            # Only update widget-based renderer
+            # For widget system, also get gradient opacity if available
+            gradient_opacities = None
+            if hasattr(self.tf_canvas, '_cached_gradient_opacity'):
+                gradient_op = self.tf_canvas._cached_gradient_opacity
+                gradient_opacities = [(g, gradient_op[g]) for g in range(0, 256, 4) if gradient_op[g] > 0.01]
+        
+            # Update renderer
             self.volume_renderer_widget.update_transfer_functions(
-                intensities, opacities, colors, self.intensity_range
+                intensities, opacities, colors, 
+                self.intensity_range,
+                gradient_opacities,
+                self.gradient_range
             )
         
-            # Render both windows
+            # Render
             self.vtkWidget_widget.GetRenderWindow().Render()
 
     def update_opacity_function(self, xs, ys, colors):
-        """Update VTK transfer functions - ONLY update point renderer"""
+        """Update point-based TF - this should still work"""
         if self._active_tf_system != 'point':
-            return  # Skip if not active
-        
-        # ONLY update point-based renderer (left window)
+            return
+    
+        # This uses the old point-based system which expects list of tuples
         self.volume_renderer.update_transfer_functions(xs, ys, colors, self.intensity_range)
 
         # Sync the OTHER canvas (not the source)

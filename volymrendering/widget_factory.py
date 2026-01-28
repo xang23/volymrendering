@@ -41,6 +41,30 @@ class TFWidget:
         elif name == "blend_mode":
             self.blend_mode = value
 
+    def sample(self):
+        """
+        Produce arrays ready for VTK volume rendering:
+        x = intensity (0-255)
+        opacity = max contribution over gradient axis
+        colors = RGB array per intensity
+        """
+        intensities = np.arange(256)
+        gradients = np.arange(256)
+        # 2D meshgrid
+        xv, yv = np.meshgrid(intensities, gradients, indexing='ij')
+
+        # Vectorized opacity calculation
+        vec_opacity = np.vectorize(self.calculate_opacity)
+        opacity_grid = vec_opacity(xv, yv)
+
+        # Combine along gradient axis (max to get strongest response)
+        opacity = opacity_grid.max(axis=1)
+
+        # Colors repeated per intensity
+        colors = np.tile(self.color, (256, 1))
+
+        return intensities, opacity, colors
+
 class GaussianWidget(TFWidget):
     def __init__(self, center_intensity=128, center_gradient=128, 
                  intensity_std=30, gradient_std=30, falloff_power=2.0,
