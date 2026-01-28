@@ -43,50 +43,76 @@ class VolumeRenderer:
 
     def update_transfer_functions(self, intensities, opacities, colors, intensity_range=None, 
                               gradient_opacities=None, gradient_range=None):
-        """Update transfer functions with optional gradient opacity"""
+        """Update transfer functions with optional gradient opacity - WITH SCALING"""
         # Keep your existing scalar opacity and color setup
         scalar_opacity = vtk.vtkPiecewiseFunction()
         color_tf = vtk.vtkColorTransferFunction()
     
-        # Add scalar opacity points
+        # Convert from 0-255 range to actual intensity range
+        if intensity_range:
+            raw_int_min, raw_int_max = intensity_range
+        else:
+            raw_int_min, raw_int_max = 0, 255
+    
+        # Always start with zero at minimum
+        scalar_opacity.AddPoint(raw_int_min, 0.0)
+        color_tf.AddRGBPoint(raw_int_min, 1.0, 1.0, 1.0)
+    
+        # Add scalar opacity points WITH SCALING
         for intensity, opacity in zip(intensities, opacities):
             if opacity > 0:
-                scalar_opacity.AddPoint(intensity, opacity)
+                # Scale intensity from 0-255 to actual range
+                abs_val = raw_int_min + (intensity / 255.0) * (raw_int_max - raw_int_min)
+                scalar_opacity.AddPoint(abs_val, opacity)
     
-        # Add color points
+        # Add color points WITH SCALING
         for intensity, color in zip(intensities, colors):
             if len(color) == 3:
                 r, g, b = color
             else:
                 r, g, b = 1.0, 1.0, 1.0
-            color_tf.AddRGBPoint(intensity, r, g, b)
+            # Scale intensity from 0-255 to actual range
+            abs_val = raw_int_min + (intensity / 255.0) * (raw_int_max - raw_int_min)
+            color_tf.AddRGBPoint(abs_val, r, g, b)
+    
+        # Always end with zero at maximum
+        scalar_opacity.AddPoint(raw_int_max, 0.0)
+        color_tf.AddRGBPoint(raw_int_max, 1.0, 1.0, 1.0)
     
         # Set scalar opacity and color
         self.volume_property.SetScalarOpacity(scalar_opacity)
         self.volume_property.SetColor(color_tf)
     
         # NEW: Add gradient opacity if provided
-        if gradient_opacities is not None:
+        if gradient_opacities is not None and gradient_range:
+            grad_min, grad_max = gradient_range
             gradient_opacity = vtk.vtkPiecewiseFunction()
+        
+            # Always start with zero at minimum
+            gradient_opacity.AddPoint(grad_min, 0.0)
+        
+            # Add gradient opacity points WITH SCALING
             for gradient, opacity in gradient_opacities:
                 if opacity > 0:
-                    gradient_opacity.AddPoint(gradient, opacity)
+                    # Scale gradient from 0-255 to actual range
+                    abs_grad = grad_min + (gradient / 255.0) * (grad_max - grad_min)
+                    gradient_opacity.AddPoint(abs_grad, opacity)
+        
+            # Always end with zero at maximum
+            gradient_opacity.AddPoint(grad_max, 0.0)
+        
             self.volume_property.SetGradientOpacity(gradient_opacity)
             self.volume_property.ShadeOn()
         else:
-            # Fallback: use a default gradient opacity
+            # Fallback: use a default gradient opacity (disabled)
             gradient_opacity = vtk.vtkPiecewiseFunction()
-            gradient_opacity.AddPoint(0, 0.0)
-            gradient_opacity.AddPoint(50, 0.5)
+            gradient_opacity.AddPoint(0, 1.0)  # Always fully opaque
             gradient_opacity.AddPoint(255, 1.0)
             self.volume_property.SetGradientOpacity(gradient_opacity)
     
         # Enable shading for better surface perception
         self.volume_property.ShadeOn()
         self.volume_property.SetInterpolationTypeToLinear()
-    
-        # Trigger render
-       # self.render_window.Render()
 
     def set_volume_data(self, image_data, reader=None):
         """Set volume data for THIS instance."""

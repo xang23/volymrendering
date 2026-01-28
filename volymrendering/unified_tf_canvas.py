@@ -121,10 +121,24 @@ class UnifiedTFCanvas(BaseTransferFunction):
     
     def sample_for_vtk(self):
         """Main entry point for VTK sampling - properly handles both 1D and 2D"""
+        print(f"🔍 sample_for_vtk called, tf_type={self.tf_type}, widgets={len(self.widgets)}")
+    
         if self.tf_type == '1d':
-            return self._sample_1d_for_vtk()
+            result = self._sample_1d_for_vtk()
+            print(f"📊 1D mode: returning {len(result)} samples")
+            return result
         else:  # 2D mode
-            return self._sample_2d_for_vtk_dual_functions()
+            result = self._sample_2d_for_vtk_dual_functions()
+            print(f"📊 2D mode: returning {len(result)} samples")
+        
+            # Debug: Check if gradient was stored
+            if hasattr(self, '_cached_gradient_opacity'):
+                grad_op = self._cached_gradient_opacity
+                if isinstance(grad_op, np.ndarray):
+                    non_zero = np.sum(grad_op > 0.01)
+                    print(f"📊 Stored gradient opacity has {non_zero} non-zero values")
+        
+            return result
 
     def _sample_1d_for_vtk(self):
         """Sample 1D transfer function for VTK (KEEP your existing 1D logic)"""
@@ -229,9 +243,9 @@ class UnifiedTFCanvas(BaseTransferFunction):
     
         print(f"📊 Generated {len(samples)} samples for VTK")
     
-        # ALSO store the gradient opacity separately if needed
-        if hasattr(self, '_cached_gradient_opacity'):
-            self._cached_gradient_opacity = gradient_opacity
+        # CRITICAL FIX: ALWAYS store gradient opacity (not conditional!)
+        self._cached_gradient_opacity = gradient_opacity
+        print(f"📊 Stored gradient opacity array with shape: {gradient_opacity.shape}")
     
         return samples
     

@@ -544,30 +544,58 @@ class VolumeApp(QtWidgets.QMainWindow):
     def update_volume_from_widgets(self):
         """Update volume from widget-based TF"""
         if self._active_tf_system not in ['widget', 'nd']:
+            print(f"⚠️ Widget system not active ({self._active_tf_system})")
             return
-    
-        # For point-based compatibility, use 'compatible' format
+
+        # Get samples
         samples = self.tf_canvas.sample_for_vtk()
     
+        # DEBUG: Check what we got
+        print(f"📊 Got {len(samples) if samples else 0} samples")
+        print(f"📊 Has cached gradient? {hasattr(self.tf_canvas, '_cached_gradient_opacity')}")
+
         if samples:
             intensities = [s[0] for s in samples]
             opacities = [s[1] for s in samples]
             colors = [s[2] for s in samples]
-        
+    
             # For widget system, also get gradient opacity if available
             gradient_opacities = None
+        
+            # FIX: Properly check and extract gradient opacity
             if hasattr(self.tf_canvas, '_cached_gradient_opacity'):
                 gradient_op = self.tf_canvas._cached_gradient_opacity
-                gradient_opacities = [(g, gradient_op[g]) for g in range(0, 256, 4) if gradient_op[g] > 0.01]
+            
+                # Check if it's a numpy array or dict
+                if isinstance(gradient_op, np.ndarray):
+                    print(f"📊 Gradient opacity is numpy array with shape: {gradient_op.shape}")
+                    # Create list of (gradient, opacity) pairs
+                    gradient_opacities = []
+                    for g in range(0, 256, 4):  # Sample every 4th
+                        if gradient_op[g] > 0.01:
+                            gradient_opacities.append((g, gradient_op[g]))
+                    print(f"📊 Extracted {len(gradient_opacities)} gradient points")
+            
+                elif isinstance(gradient_op, dict):
+                    print(f"📊 Gradient opacity is dict with {len(gradient_op)} entries")
+                    gradient_opacities = list(gradient_op.items())
+                else:
+                    print(f"⚠️ Unknown gradient opacity type: {type(gradient_op)}")
+            else:
+                print(f"⚠️ No cached gradient opacity found!")
+    
+            # Update renderer - DEBUG output
+            print(f"🎯 Updating widget renderer with {len(intensities)} intensity points")
+            if gradient_opacities:
+                print(f"🎯 And {len(gradient_opacities)} gradient opacity points")
         
-            # Update renderer
             self.volume_renderer_widget.update_transfer_functions(
                 intensities, opacities, colors, 
                 self.intensity_range,
                 gradient_opacities,
                 self.gradient_range
             )
-        
+    
             # Render
             self.vtkWidget_widget.GetRenderWindow().Render()
 
@@ -576,8 +604,13 @@ class VolumeApp(QtWidgets.QMainWindow):
         if self._active_tf_system != 'point':
             return
     
-        # This uses the old point-based system which expects list of tuples
-        self.volume_renderer.update_transfer_functions(xs, ys, colors, self.intensity_range)
+        # Use the NEW method signature
+        self.volume_renderer.update_transfer_functions(
+            xs, ys, colors, 
+            self.intensity_range,  # Pass intensity_range
+            None,  # No gradient opacity for point-based
+            None   # No gradient range for point-based
+        )
 
         # Sync the OTHER canvas (not the source)
         if self._tf_change_source == '1d':
