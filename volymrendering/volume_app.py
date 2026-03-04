@@ -54,6 +54,33 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.setup_data_components()
         self.setup_dual_transfer_functions()
 
+    def test_colored_widget(self):
+        """Test with a clearly visible colored widget"""
+        if not hasattr(self, 'tf_canvas'):
+            return
+        
+        # Clear widgets
+        self.tf_canvas.widgets.clear()
+        
+        # Create widget with VISIBLE color
+        colored_widget = WidgetFactory.create_widget(
+            WidgetType.GAUSSIAN,
+            center_intensity=30,  # Where data is
+            center_gradient=50,
+            intensity_std=20,
+            gradient_std=30,
+            opacity=0.8,
+            color=(0.8, 0.2, 0.2),  # BRIGHT RED
+            blend_mode='max'
+        )
+        
+        self.tf_canvas.add_widget(colored_widget)
+        
+        print(f"✅ Created BRIGHT RED widget at data location")
+        print(f"   Color: {colored_widget.color}")
+        
+        self.update_volume_from_widgets()
+
     def setup_ui(self):
         """Setup the main user interface with dual render views"""
         self.frame = QtWidgets.QFrame()
@@ -337,7 +364,7 @@ class VolumeApp(QtWidgets.QMainWindow):
 
         # Initialize TF manager
         self.tf_manager = TFManager(self.tf_selector, self)
-        points_x, points_y, colors = self.tf_manager.get_initial_tf_data(self.normalized_scalars)
+        points_x, points_y, colors = self.tf_manager.get_initial_tf_data(self.normalized_scalars, data_range=self.intensity_range)
 
         # SETUP POINT-BASED TF (left panel)
         print("Setting up point-based TF...")
@@ -385,6 +412,23 @@ class VolumeApp(QtWidgets.QMainWindow):
 
         # CREATE WIDGET MANAGER BUT DON'T SHOW IT YET - it will be in separate window
         self.widget_manager = WidgetManager(self.tf_canvas)
+
+        # TEST WITH COLORED WIDGET INSTEAD OF DEFAULT WHITE
+        colored_widget = WidgetFactory.create_widget(
+            WidgetType.GAUSSIAN,
+            center_intensity=30,  # Where data is (based on your diagnostics)
+            center_gradient=50,
+            intensity_std=20,
+            gradient_std=30,
+            opacity=0.8,
+            color=(0.8, 0.2, 0.2),  # BRIGHT RED
+            blend_mode='max'
+        )
+    
+        self.tf_canvas.add_widget(colored_widget)
+        self.widget_manager.update_widget_list()
+
+        print("✅ Created colored widget for testing")
 
         # Add initial widget
         test_widget = WidgetFactory.create_widget(WidgetType.GAUSSIAN)
@@ -542,67 +586,118 @@ class VolumeApp(QtWidgets.QMainWindow):
             traceback.print_exc()
 
     def update_volume_from_widgets(self):
-        """Update volume from widget-based TF"""
+        """Update volume from widget-based TF with PROPER SCALING"""
         if self._active_tf_system not in ['widget', 'nd']:
             print(f"⚠️ Widget system not active ({self._active_tf_system})")
             return
 
         # Get samples
         samples = self.tf_canvas.sample_for_vtk()
-    
+
         # DEBUG: Check what we got
         print(f"📊 Got {len(samples) if samples else 0} samples")
         print(f"📊 Has cached gradient? {hasattr(self.tf_canvas, '_cached_gradient_opacity')}")
 
         if samples:
-            intensities = [s[0] for s in samples]
+            intensities = [s[0] for s in samples]  # 0-255 values
             opacities = [s[1] for s in samples]
             colors = [s[2] for s in samples]
-    
-            # For widget system, also get gradient opacity if available
-            gradient_opacities = None
         
-            # FIX: Properly check and extract gradient opacity
+            # DEBUG: Show what widgets produced
+            print(f"📊 Widget samples: intensity={min(intensities)}-{max(intensities)} "
+                  f"opacity={min(opacities):.3f}-{max(opacities):.3f}")
+    
+            # SCALE intensities from 0-255 to actual range
+            int_min, int_max = self.intensity_range
+            scaled_intensities = []
+            for i in intensities:
+                scaled = int_min + (i / 255.0) * (int_max - int_min)
+                scaled_intensities.append(scaled)
+        
+            print(f"📊 Scaled intensities: {min(intensities)}-{max(intensities)} → "
+                  f"{min(scaled_intensities):.1f}-{max(scaled_intensities):.1f}")
+        
+            # SCALE gradient opacity too
+            gradient_opacities = None
             if hasattr(self.tf_canvas, '_cached_gradient_opacity'):
                 gradient_op = self.tf_canvas._cached_gradient_opacity
-            
+        
                 # Check if it's a numpy array or dict
                 if isinstance(gradient_op, np.ndarray):
                     print(f"📊 Gradient opacity is numpy array with shape: {gradient_op.shape}")
-                    # Create list of (gradient, opacity) pairs
+                
+                    # SCALE gradient opacity!
+                    grad_min, grad_max = self.gradient_range
                     gradient_opacities = []
+                    non_zero_count = 0
+                
                     for g in range(0, 256, 4):  # Sample every 4th
                         if gradient_op[g] > 0.01:
-                            gradient_opacities.append((g, gradient_op[g]))
-                    print(f"📊 Extracted {len(gradient_opacities)} gradient points")
+                            # SCALE gradient from 0-255 to actual range
+                            scaled_g = grad_min + (g / 255.0) * (grad_max - grad_min)
+                            gradient_opacities.append((scaled_g, gradient_op[g]))
+                            non_zero_count += 1
+                
+                    print(f"📊 Extracted {non_zero_count} gradient points (scaled)")
+                    if gradient_opacities:
+                        print(f"📊 Scaled gradient range: {grad_min:.1f}-{grad_max:.1f}")
             
                 elif isinstance(gradient_op, dict):
                     print(f"📊 Gradient opacity is dict with {len(gradient_op)} entries")
-                    gradient_opacities = list(gradient_op.items())
+                    # Scale dict entries
+                    grad_min, grad_max = self.gradient_range
+                    gradient_opacities = []
+                    for g, opacity in gradient_op.items():
+                        scaled_g = grad_min + (g / 255.0) * (grad_max - grad_min)
+                        gradient_opacities.append((scaled_g, opacity))
                 else:
                     print(f"⚠️ Unknown gradient opacity type: {type(gradient_op)}")
             else:
                 print(f"⚠️ No cached gradient opacity found!")
-    
+
             # Update renderer - DEBUG output
-            print(f"🎯 Updating widget renderer with {len(intensities)} intensity points")
+            print(f"🎯 Updating widget renderer with {len(scaled_intensities)} intensity points")
             if gradient_opacities:
                 print(f"🎯 And {len(gradient_opacities)} gradient opacity points")
         
+            # Check if opacities are reasonable
+            if max(opacities) < 0.05:
+                print(f"⚠️ WARNING: Maximum opacity is very low ({max(opacities):.3f})")
+                print(f"   Widgets may not be visible. Try increasing widget opacity.")
+    
+            # DEBUG: Show first few scaled points
+            print(f"📋 First 3 scaled points to VTK:")
+            for i in range(min(3, len(scaled_intensities))):
+                print(f"   {i}: Intensity={scaled_intensities[i]:.1f} "
+                      f"(was {intensities[i]} 0-255), Opacity={opacities[i]:.3f}")
+
+            # Pass SCALED values
             self.volume_renderer_widget.update_transfer_functions(
-                intensities, opacities, colors, 
+                scaled_intensities,  # ← SCALED!
+                opacities, 
+                colors, 
                 self.intensity_range,
-                gradient_opacities,
+                gradient_opacities,  # ← SCALED!
                 self.gradient_range
             )
-    
+
             # Render
             self.vtkWidget_widget.GetRenderWindow().Render()
+            print("✅ Render complete")
 
     def update_opacity_function(self, xs, ys, colors):
         """Update point-based TF - this should still work"""
+        # DEBUG: Check what point-based TF is sending
+        print(f"📊 Point-based TF sending {len(xs)} points")
+        print(f"   First point: {xs[0]:.1f}, color: {colors[0]}")
+        print(f"   Last point: {xs[-1]:.1f}, color: {colors[-1]}")
         if self._active_tf_system != 'point':
             return
+            """Update point-based TF"""
+        print(f"📊 Point-based TF sending {len(xs)} points")
+        print(f"   Points:")
+        for i in range(len(xs)):
+            print(f"     {i}: Intensity={xs[i]:.1f}, Opacity={ys[i]:.3f}, Color={colors[i]}")
     
         # Use the NEW method signature
         self.volume_renderer.update_transfer_functions(
@@ -678,25 +773,61 @@ class VolumeApp(QtWidgets.QMainWindow):
             print(f"Error resetting widget view: {e}")
 
     def update_opacity_function_from_1d(self, xs, ys, colors):
-        """Update from 1D canvas - sync to 2D and VTK."""
+        """Update from 1D canvas - CONVERT from display to actual range!"""
+        print(f"📊 1D TF callback: Received {len(xs)} points in DISPLAY coordinates (0-255)")
+    
+        # Convert from 0-255 display to actual data range
+        int_min, int_max = self.intensity_range
+        actual_xs = []
+    
+        for display_x in xs:
+            # Convert 0-255 → actual data range
+            actual_x = int_min + (display_x / 255.0) * (int_max - int_min)
+            actual_xs.append(actual_x)
+    
+        print(f"   Display range: {min(xs):.1f}-{max(xs):.1f}")
+        print(f"   Actual range: {min(actual_xs):.1f}-{max(actual_xs):.1f}")
+    
+        # Now pass ACTUAL values to update_opacity_function
         if self._tf_change_source == '2d':
             return
         self._tf_change_source = '1d'
-        self.update_opacity_function(xs, ys, colors)
+        self.update_opacity_function(actual_xs, ys, colors)  # ← ACTUAL values!
         self._tf_change_source = None
 
     def update_opacity_function_from_2d(self, xs, ys, colors):
-        """Update from 2D canvas - sync to 1D and VTK."""
+        """Update from 2D canvas - CONVERT if needed"""
+        print(f"📊 2D TF callback: Received {len(xs)} points")
+    
+        # Check if xs are in display coordinates (0-255)
+        if max(xs) <= 255.0:
+            # Convert to actual range
+            int_min, int_max = self.intensity_range
+            actual_xs = []
+            for display_x in xs:
+                actual_x = int_min + (display_x / 255.0) * (int_max - int_min)
+                actual_xs.append(actual_x)
+            xs = actual_xs
+    
         if self._tf_change_source == '1d':
             return
         self._tf_change_source = '2d'
+    
+        # Update 1D canvas with DISPLAY coordinates
         if hasattr(self, 'plot_canvas'):
-            self.plot_canvas.points_x = list(xs)
-            self.plot_canvas.points_y = list(ys)
+            # Convert actual → display for 1D canvas
+            display_xs = []
+            for actual_x in xs:
+                display_x = (actual_x - int_min) / (int_max - int_min) * 255.0
+                display_xs.append(display_x)
+        
+            self.plot_canvas.points_x = display_xs  # 0-255 for display!
+            self.plot_canvas.points_y = ys
             self.plot_canvas.colors = [tuple(c) for c in colors]
             self.plot_canvas._sort_points_with_colors()
             self.plot_canvas._draw()
-        self.update_opacity_function(xs, ys, colors)
+    
+        self.update_opacity_function(xs, ys, colors)  # ACTUAL values for VTK
         self._tf_change_source = None
 
     def load_volume_dialog(self):
@@ -803,7 +934,8 @@ class VolumeApp(QtWidgets.QMainWindow):
             self.tf_manager.save_current_tf(
                 self.plot_canvas.points_x,
                 self.plot_canvas.points_y,
-                self.plot_canvas.colors
+                self.plot_canvas.colors,
+                data_range=self.intensity_range  # ← ADD THIS!
             )
         else:
             # TODO: Implement widget TF saving
@@ -811,23 +943,35 @@ class VolumeApp(QtWidgets.QMainWindow):
 
     def load_selected_tf(self, idx):
         """Load selected transfer function into point-based system only"""
-        tf_data = self.tf_manager.load_selected_tf(idx)
-        if tf_data:
-            xs, ys, colors = tf_data
-            # Load into point-based system only
-            if hasattr(self, 'plot_canvas'):
-                self.plot_canvas.points_x = xs
-                self.plot_canvas.points_y = ys
-                self.plot_canvas.colors = colors
-                self.plot_canvas._sort_points_with_colors()
-                self.plot_canvas._draw()
+        tf_data = self.tf_manager.load_selected_tf(
+            idx, 
+            current_data_range=self.intensity_range
+        )
+    
+        # FIX: Check if tf_data is None
+        if tf_data is None:
+            print("⚠️ Failed to load TF, keeping current")
+            return
         
-            # Update point renderer with the loaded TF
-            self.volume_renderer.update_transfer_functions(xs, ys, colors, self.intensity_range)
-        
-            # Render both windows (only point one changes)
-            self.vtkWidget_point.GetRenderWindow().Render()
-            self.vtkWidget_widget.GetRenderWindow().Render()
+        # Now safe to unpack
+        xs, ys, colors = tf_data
+    
+        # Load into point-based system
+        if hasattr(self, 'plot_canvas'):
+            self.plot_canvas.points_x = xs
+            self.plot_canvas.points_y = ys
+            self.plot_canvas.colors = colors
+            self.plot_canvas._sort_points_with_colors()
+            self.plot_canvas._draw()
+    
+        # Update point renderer with the loaded TF
+        self.volume_renderer.update_transfer_functions(
+            xs, ys, colors, self.intensity_range
+        )
+    
+        # Render both windows
+        self.vtkWidget_point.GetRenderWindow().Render()
+        self.vtkWidget_widget.GetRenderWindow().Render()
 
     def closeEvent(self, event):
         """Handle main window closing"""

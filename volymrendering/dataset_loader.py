@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import vtk
 from vtk.util import numpy_support
 from PyQt5 import QtWidgets
@@ -95,6 +95,20 @@ class DatasetLoader:
             reader.Update()
             image_data = reader.GetOutput()
 
+        elif ext == ".vtk":
+            reader = vtk.vtkDataSetReader()
+            reader.SetFileName(file_path)
+            reader.Update()
+            image_data = reader.GetOutput()
+    
+            # Check if it's image data
+            if not image_data or not image_data.GetPointData().GetScalars():
+                # Try reading as structured points
+                reader = vtk.vtkStructuredPointsReader()
+                reader.SetFileName(file_path)
+                reader.Update()
+                image_data = reader.GetOutput()
+
         elif ext == ".mhd":
             reader = vtk.vtkMetaImageReader()
             reader.SetFileName(file_path)
@@ -153,6 +167,19 @@ class DatasetLoader:
             np_scalars = numpy_support.vtk_to_numpy(image_data.GetPointData().GetScalars()).astype(np.float32)
         except Exception as e:
             raise RuntimeError(f"Failed to extract scalars: {e}")
+
+        # ===== ADD THIS DEBUG =====
+        print(f"\n🔍 DATA RANGE DEBUG:")
+        print(f"   Raw data min: {np_scalars.min():.1f}")
+        print(f"   Raw data max: {np_scalars.max():.1f}")
+        print(f"   Raw data mean: {np_scalars.mean():.1f}")
+        print(f"   Raw data std: {np_scalars.std():.1f}")
+    
+        # Histogram to see distribution
+        hist, bins = np.histogram(np_scalars, bins=20)
+        print(f"   Histogram (first 10 bins):")
+        for i in range(min(10, len(hist))):
+            print(f"     {bins[i]:.0f}-{bins[i+1]:.0f}: {hist[i]} voxels")
 
         # Compute gradient
         grad_filter = vtk.vtkImageGradientMagnitude()

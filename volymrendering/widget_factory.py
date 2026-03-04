@@ -75,7 +75,7 @@ class GaussianWidget(TFWidget):
         self.falloff_power = falloff_power
         
     def calculate_opacity(self, intensity, gradient):
-        # Proper 2D Gaussian
+        # Proper 2D Gaussian: f(x,y) = A * exp(-[(x-μ_x)²/σ_x² + (y-μ_y)²/σ_y²] / 2)
         dx = (intensity - self.center_intensity) / self.intensity_std
         dy = (gradient - self.center_gradient) / self.gradient_std
         distance_sq = dx*dx + dy*dy
@@ -167,6 +167,7 @@ class RectangularWidget(TFWidget):
         self.falloff = max(0, falloff)  # Falloff distance
         
     def calculate_opacity(self, intensity, gradient):
+        #f(x,y) = A * I(|x-μ_x| ≤ w/2) * I(|y-μ_y| ≤ h/2)
         half_width = self.intensity_width / 2.0
         half_height = self.gradient_height / 2.0
     
@@ -211,7 +212,7 @@ class EllipsoidWidget(TFWidget):
         self.falloff_power = falloff_power
         
     def calculate_opacity(self, intensity, gradient):
-        # Early exit optimization
+        # Early exit optimization f(x,y) = A * I((x-μ_x)²/R_x² + (y-μ_y)²/R_y² ≤ 1)
         if (abs(intensity - self.center_intensity) > self.intensity_radius or
             abs(gradient - self.center_gradient) > self.gradient_radius):
             return 0.0
