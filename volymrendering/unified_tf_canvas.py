@@ -503,3 +503,62 @@ class UnifiedTFCanvas(BaseTransferFunction):
             # Default to widget center ±10
             center = int(widget.center_intensity)
             return range(max(0, center-10), min(255, center+10) + 1)
+
+    def set_projection_features(self, feat_x, feat_y):
+        """Set which features this canvas is showing"""
+        self.projection_x = feat_x
+        self.projection_y = feat_y
+
+    def set_nd_callback(self, callback):
+        """Set callback for nD updates"""
+        self.nd_update_callback = callback
+
+    def on_motion(self, event):
+        """Modified to update nD coordinates"""
+        if self.dragging_widget and event.inaxes == self.ax and self.active_widget is not None:
+            widget = self.widgets[self.active_widget]
+        
+            # Update 2D position
+            widget.center_intensity = event.xdata
+            widget.center_gradient = event.ydata
+        
+            # NEW: Update nD coordinates if this is a projection
+            if hasattr(widget, 'nd_ref') and hasattr(self, 'projection_x'):
+                if hasattr(self, 'nd_update_callback'):
+                    self.nd_update_callback(
+                        widget, 
+                        self.projection_x, self.projection_y,
+                        event.xdata, event.ydata
+                    )
+        
+            self._draw()
+            self._notify_app()
+        else:
+            super().on_motion(event)
+
+    def on_scroll(self, event):
+        """Handle mouse wheel for zooming"""
+        if event.inaxes != self.ax:
+            return
+    
+        # Get current limits
+        x_min, x_max = self.ax.get_xlim()
+        y_min, y_max = self.ax.get_ylim()
+    
+        # Zoom factor (scroll up = zoom in, scroll down = zoom out)
+        scale = 0.9 if event.button == 'up' else 1.1
+    
+        # Calculate new limits centered on mouse position
+        x_range = (x_max - x_min) * scale
+        y_range = (y_max - y_min) * scale
+    
+        new_x_min = event.xdata - (event.xdata - x_min) * scale
+        new_x_max = event.xdata + (x_max - event.xdata) * scale
+        new_y_min = event.ydata - (event.ydata - y_min) * scale
+        new_y_max = event.ydata + (y_max - event.ydata) * scale
+    
+        # Apply new limits
+        self.ax.set_xlim(new_x_min, new_x_max)
+        self.ax.set_ylim(new_y_min, new_y_max)
+    
+        self.draw()

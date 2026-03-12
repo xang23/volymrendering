@@ -18,22 +18,36 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
     def setup_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
         
+        n = len(self.feature_names)
+        total_pairs = n * (n - 1) // 2
+        
         # Title
-        title = QtWidgets.QLabel("nD Feature Matrix")
+        title = QtWidgets.QLabel(
+            f"nD Feature Matrix ({n} features, {total_pairs} unique pairs)"
+        )
         title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2E86AB;")
         layout.addWidget(title)
         
         # Description
-        desc = QtWidgets.QLabel("Click any cell to explore that feature pair")
+        desc = QtWidgets.QLabel(
+            f"Click any cell above the diagonal to explore that feature pair. "
+            f"Lower triangle is mirror (not shown)."
+        )
+        desc.setWordWrap(True)
         desc.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(desc)
+        
+        # Add SCROLL AREA for large matrices
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
         # Create matrix grid
         self.matrix_widget = QtWidgets.QWidget()
         matrix_layout = QtWidgets.QGridLayout(self.matrix_widget)
         matrix_layout.setSpacing(2)
         
-        # Create headers and cells
         n_features = len(self.feature_names)
         
         # Column headers (x-axis features)
@@ -51,18 +65,52 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
             label.setStyleSheet("font-weight: bold; background: #4A6572; color: white; padding: 5px;")
             matrix_layout.addWidget(label, row + 1, 0)
             
-            # Matrix cells
+            # Matrix cells - ONLY UPPER TRIANGLE + DIAGONAL
             for col, feat_x in enumerate(self.feature_names):
-                if feat_x == feat_y:
-                    # Diagonal - show feature histogram
+                if col < row:
+                    # Lower triangle - empty placeholder
+                    empty_widget = QtWidgets.QLabel("")
+                    empty_widget.setFixedSize(120, 120)
+                    empty_widget.setStyleSheet("background: #2A2A2A; border: none;")
+                    matrix_layout.addWidget(empty_widget, row + 1, col + 1)
+                    
+                elif col == row:
+                    # Diagonal - histogram
                     cell = self.create_histogram_cell(feat_x)
-                else:
-                    # Off-diagonal - show 2D scatter
+                    matrix_layout.addWidget(cell, row + 1, col + 1)
+                    
+                else:  # col > row - Upper triangle (unique pairs)
                     cell = self.create_scatter_cell(feat_x, feat_y)
-                
-                matrix_layout.addWidget(cell, row + 1, col + 1)
+                    matrix_layout.addWidget(cell, row + 1, col + 1)
         
-        layout.addWidget(self.matrix_widget)
+        scroll.setWidget(self.matrix_widget)
+        layout.addWidget(scroll)
+        
+        # Add legend
+        self.add_legend(layout)
+        
+    def add_legend(self, layout):
+        """Add legend explaining matrix structure"""
+        legend_widget = QtWidgets.QWidget()
+        legend_layout = QtWidgets.QHBoxLayout(legend_widget)
+        
+        # Diagonal
+        diag_label = QtWidgets.QLabel("■ Diagonal: Feature histogram")
+        diag_label.setStyleSheet("color: #3498db; padding: 2px;")
+        legend_layout.addWidget(diag_label)
+        
+        # Upper triangle
+        upper_label = QtWidgets.QLabel("● Upper: Unique feature pairs")
+        upper_label.setStyleSheet("color: #e67e22; padding: 2px;")
+        legend_layout.addWidget(upper_label)
+        
+        # Lower triangle
+        lower_label = QtWidgets.QLabel("◻ Lower: Mirrored (hidden)")
+        lower_label.setStyleSheet("color: #7f8c8d; padding: 2px;")
+        legend_layout.addWidget(lower_label)
+        
+        legend_layout.addStretch()
+        layout.addWidget(legend_widget)
         
     def create_histogram_cell(self, feature_name):
         """Create a cell showing feature histogram (diagonal)"""
@@ -113,7 +161,7 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
             data_x = data_x[indices]
             data_y = data_y[indices]
             
-        ax.scatter(data_x, data_y, s=1, alpha=0.6, color='#3498db')
+        ax.scatter(data_x, data_y, s=1, alpha=0.6, color='#e67e22')
         ax.set_xticks([])
         ax.set_yticks([])
         ax.spines['top'].set_visible(False)
@@ -125,14 +173,24 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
         
         # Make clickable
         widget.mousePressEvent = lambda e: self.on_cell_clicked(feat_x, feat_y)
-        widget.setToolTip(f"Click to explore {feat_x} vs {feat_y} in main TF")
+        widget.setToolTip(f"Click to explore {feat_x} vs {feat_y}")
         
         return widget
         
     def on_cell_clicked(self, feat_x, feat_y):
-        """Handle cell clicks"""
+        """Handle cell clicks - open popup window"""
         print(f"🎯 Matrix cell clicked: {feat_x} vs {feat_y}")
-        if self.update_callback:
+    
+        # Find the main app window
+        parent = self
+        while parent and not hasattr(parent, 'open_feature_popup'):
+            parent = parent.parent()
+    
+        if parent and hasattr(parent, 'open_feature_popup'):
+            # Open popup from main app
+            parent.open_feature_popup(feat_x, feat_y)
+        elif self.update_callback:
+            # Fallback to old behavior
             self.update_callback(feat_x, feat_y)
             
     def update_matrix(self):
@@ -142,6 +200,9 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
         self.matrix_widget = QtWidgets.QWidget()
         self.layout().replaceWidget(old_matrix, self.matrix_widget)
         old_matrix.deleteLater()
+        
+        # Update feature names
+        self.feature_names = list(self.feature_data.keys())
         
         # Create new matrix
         self.setup_ui()

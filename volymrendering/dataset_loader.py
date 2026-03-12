@@ -1,9 +1,9 @@
-﻿import numpy as np
+﻿# dataset_loader.py
 import vtk
 from vtk.util import numpy_support
-from PyQt5 import QtWidgets
+import numpy as np
 import os
-
+from PyQt5 import QtWidgets
 
 class DatasetLoader:
     def __init__(self, parent_window=None):
@@ -23,7 +23,7 @@ class DatasetLoader:
         
         file_name, _ = QtWidgets.QFileDialog.getOpenFileName(
             self.parent_window, "Open Volume Dataset", start_dir or "",
-            "VTI Files (*.vti);;VOL/RAW Files (*.vol *.raw);;MHD Files (*.mhd);;All Files (*)"
+            "VTI Files (*.vti);;VTK Files (*.vtk);;VOL/RAW Files (*.vol *.raw);;MHD Files (*.mhd);;All Files (*)"
         )
         
         if not file_name:
@@ -80,42 +80,38 @@ class DatasetLoader:
         
         return dims, dtype, byte_order
 
+    def _get_reader_for_file(self, file_path):
+        """Get appropriate reader based on file extension"""
+        ext = os.path.splitext(file_path)[1].lower()
+        
+        if ext == '.vti':
+            reader = vtk.vtkXMLImageDataReader()
+        elif ext == '.vtk':
+            # For .vtk, we need to try multiple readers
+            return None  # Special handling
+        elif ext == '.mhd':
+            reader = vtk.vtkMetaImageReader()
+        elif ext in ('.raw', '.vol'):
+            reader = None  # Special handling
+        else:
+            raise ValueError(f"Unsupported file format: {ext}")
+        
+        return reader
+
     def load_volume(self, file_path):
         """
-        Load .vti, .mhd, .raw, .vol (raw) datasets.
-        Returns tuple (image_data, reader, np_scalars, np_gradient) or raises exception.
+        Load volume and AUTO-DISCOVER all features.
+        Returns tuple (image_data, reader, all_features)
         """
+        print(f"\n📂 Loading: {file_path}")
+        
         ext = os.path.splitext(file_path)[1].lower()
         image_data = None
         reader = None
+        np_scalars = None
 
-        if ext == ".vti":
-            reader = vtk.vtkXMLImageDataReader()
-            reader.SetFileName(file_path)
-            reader.Update()
-            image_data = reader.GetOutput()
-
-        elif ext == ".vtk":
-            reader = vtk.vtkDataSetReader()
-            reader.SetFileName(file_path)
-            reader.Update()
-            image_data = reader.GetOutput()
-    
-            # Check if it's image data
-            if not image_data or not image_data.GetPointData().GetScalars():
-                # Try reading as structured points
-                reader = vtk.vtkStructuredPointsReader()
-                reader.SetFileName(file_path)
-                reader.Update()
-                image_data = reader.GetOutput()
-
-        elif ext == ".mhd":
-            reader = vtk.vtkMetaImageReader()
-            reader.SetFileName(file_path)
-            reader.Update()
-            image_data = reader.GetOutput()
-
-        elif ext in (".raw", ".vol"):
+        # --- HANDLE RAW/VOL FILES ---
+        if ext in ('.raw', '.vol'):
             settings = self._ask_raw_settings(file_path)
             if settings is None:
                 raise RuntimeError("Raw/.vol load cancelled or invalid settings.")
@@ -158,43 +154,222 @@ class DatasetLoader:
             vtk_data.GetPointData().SetScalars(vtk_arr)
             image_data = vtk_data
             reader = None
+            np_scalars = flat.astype(np.float32)
 
-        else:
-            raise RuntimeError(f"Unsupported extension: {ext}")
-
-        # Extract scalars
-        try:
+        # --- HANDLE .VTK FILES (YOUR ORIGINAL CODE) ---
+        elif ext == '.vtk':
+            # Try DataSetReader first
+            reader = vtk.vtkDataSetReader()
+            reader.SetFileName(file_path)
+            reader.Update()
+            image_data = reader.GetOutput()
+            
+            # Check if it worked
+            if not image_data or not image_data.GetPointData().GetScalars():
+                # Try StructuredPointsReader
+                reader = vtk.vtkStructuredPointsReader()
+                reader.SetFileName(file_path)
+                reader.Update()
+                image_data = reader.GetOutput()
+            
+            if not image_data or not image_data.GetPointData().GetScalars():
+                raise RuntimeError("Failed to read .vtk file with any reader")
+            
             np_scalars = numpy_support.vtk_to_numpy(image_data.GetPointData().GetScalars()).astype(np.float32)
-        except Exception as e:
-            raise RuntimeError(f"Failed to extract scalars: {e}")
 
-        # ===== ADD THIS DEBUG =====
+        # --- HANDLE OTHER FORMATS (.vti, .mhd) ---
+        else:
+            reader = self._get_reader_for_file(file_path)
+            if reader is None:
+                raise RuntimeError(f"Could not create reader for {ext}")
+            
+            reader.SetFileName(file_path)
+            reader.Update()
+            image_data = reader.GetOutput()
+            
+            # Get primary scalars
+            scalars = image_data.GetPointData().GetScalars()
+            if scalars is None:
+                raise ValueError("No scalar data found in file")
+            
+            np_scalars = numpy_support.vtk_to_numpy(scalars).astype(np.float32)
+
+        # ===== DEBUG OUTPUT =====
         print(f"\n🔍 DATA RANGE DEBUG:")
         print(f"   Raw data min: {np_scalars.min():.1f}")
         print(f"   Raw data max: {np_scalars.max():.1f}")
         print(f"   Raw data mean: {np_scalars.mean():.1f}")
         print(f"   Raw data std: {np_scalars.std():.1f}")
-    
+        
         # Histogram to see distribution
         hist, bins = np.histogram(np_scalars, bins=20)
         print(f"   Histogram (first 10 bins):")
         for i in range(min(10, len(hist))):
             print(f"     {bins[i]:.0f}-{bins[i+1]:.0f}: {hist[i]} voxels")
 
-        # Compute gradient
-        grad_filter = vtk.vtkImageGradientMagnitude()
+        # --- STEP 1: Dictionary to hold ALL features ---
+        all_features = {}
+        
+        # --- STEP 2: ADD PRIMARY SCALAR FIELD ---
+        all_features['Intensity'] = np_scalars
+        print(f"   ✅ Added primary: Intensity ({np_scalars.shape})")
+        
+        # --- STEP 3: AUTO-DISCOVER OTHER ARRAYS IN THE FILE ---
+        if image_data:
+            point_data = image_data.GetPointData()
+            for i in range(point_data.GetNumberOfArrays()):
+                array_name = point_data.GetArrayName(i)
+                array = point_data.GetArray(i)
+                
+                # Skip if it's the same as scalars or already added
+                if array_name and array_name not in all_features:
+                    if array is not None:
+                        np_array = numpy_support.vtk_to_numpy(array)
+                        # Only add if it's the same size as primary
+                        if len(np_array) == len(np_scalars):
+                            all_features[array_name] = np_array.astype(np.float32)
+                            print(f"   ✅ Auto-discovered: {array_name} ({np_array.shape})")
+        
+        # --- STEP 4: COMPUTE COMMON DERIVED FEATURES ---
+        
+        # Gradient Magnitude
+        all_features['Gradient'] = self.compute_gradient(image_data, reader)
+        print(f"   ✅ Computed: Gradient")
+        
+        # Laplacian
+        all_features['Laplacian'] = self.compute_laplacian(image_data, reader)
+        print(f"   ✅ Computed: Laplacian")
+        
+        # Local Variance (simple texture)
+        all_features['Texture'] = self.compute_local_variance(np_scalars)
+        print(f"   ✅ Computed: Texture")
+        
+        # Curvature (from gradient)
+        if 'Gradient' in all_features:
+            all_features['Curvature'] = self.compute_curvature(all_features['Gradient'])
+            print(f"   ✅ Computed: Curvature")
+        
+        # Entropy
+        all_features['Entropy'] = self.compute_local_entropy(np_scalars)
+        print(f"   ✅ Computed: Entropy")
+        
+        print(f"\n📊 Total features discovered/computed: {len(all_features)}")
+        for name in all_features.keys():
+            print(f"   - {name}")
+        
+        return image_data, reader, all_features
+
+    # --- COMPUTATION METHODS ---
+    
+    def compute_gradient(self, image_data, reader=None):
+        """Compute gradient magnitude using VTK"""
+        gradient = vtk.vtkImageGradientMagnitude()
         try:
             if reader is not None:
-                grad_filter.SetInputConnection(reader.GetOutputPort())
+                gradient.SetInputConnection(reader.GetOutputPort())
             else:
-                grad_filter.SetInputData(image_data)
-            grad_filter.Update()
-            np_gradient = numpy_support.vtk_to_numpy(grad_filter.GetOutput().GetPointData().GetScalars()).astype(np.float32)
-        except Exception:
-            np_gradient = np.zeros_like(np_scalars, dtype=np.float32)
-
-        return image_data, reader, np_scalars, np_gradient
-
+                gradient.SetInputData(image_data)
+            gradient.Update()
+            grad_array = gradient.GetOutput().GetPointData().GetScalars()
+            return numpy_support.vtk_to_numpy(grad_array).astype(np.float32)
+        except Exception as e:
+            print(f"⚠️ Gradient computation failed: {e}")
+            return np.zeros_like(self._get_dummy_data(image_data))
+    
+    def compute_laplacian(self, image_data, reader=None):
+        """Compute Laplacian (second derivative)"""
+        laplacian = vtk.vtkImageLaplacian()
+        try:
+            if reader is not None:
+                laplacian.SetInputConnection(reader.GetOutputPort())
+            else:
+                laplacian.SetInputData(image_data)
+            laplacian.SetDimensionality(3)
+            laplacian.Update()
+            lap_array = laplacian.GetOutput().GetPointData().GetScalars()
+            return numpy_support.vtk_to_numpy(lap_array).astype(np.float32)
+        except Exception as e:
+            print(f"⚠️ Laplacian computation failed: {e}")
+            return np.zeros_like(self._get_dummy_data(image_data))
+    
+    def _get_dummy_data(self, image_data):
+        """Helper to get dummy data for error cases"""
+        try:
+            scalars = image_data.GetPointData().GetScalars()
+            if scalars:
+                return numpy_support.vtk_to_numpy(scalars).astype(np.float32)
+        except:
+            pass
+        return np.zeros(100, dtype=np.float32)
+    
+    def compute_local_variance(self, np_scalars, window=3):
+        """Compute local variance as simple texture measure"""
+        try:
+            from scipy import ndimage
+            # Try to reshape to 3D
+            size = int(round(len(np_scalars) ** (1/3)))
+            if size**3 == len(np_scalars):
+                volume = np_scalars.reshape((size, size, size))
+                mean = ndimage.uniform_filter(volume, size=window)
+                sq_mean = ndimage.uniform_filter(volume**2, size=window)
+                variance = sq_mean - mean**2
+                return variance.flatten()
+            else:
+                return np.zeros_like(np_scalars)
+        except ImportError:
+            print("⚠️ scipy not available, Texture feature disabled")
+            return np.zeros_like(np_scalars)
+        except Exception as e:
+            print(f"⚠️ Texture computation failed: {e}")
+            return np.zeros_like(np_scalars)
+    
+    def compute_curvature(self, gradient_data):
+        """Compute curvature from gradient (simplified)"""
+        try:
+            grad_norm = gradient_data / (np.max(gradient_data) + 1e-6)
+            curvature = np.gradient(grad_norm)
+            return np.abs(curvature)
+        except Exception as e:
+            print(f"⚠️ Curvature computation failed: {e}")
+            return np.zeros_like(gradient_data)
+    
+    def compute_local_entropy(self, np_scalars, window=3):
+        """Compute local entropy"""
+        try:
+            from scipy import ndimage
+            from scipy.stats import entropy
+            
+            size = int(round(len(np_scalars) ** (1/3)))
+            if size**3 == len(np_scalars):
+                volume = np_scalars.reshape((size, size, size))
+                
+                # Normalize to 0-255
+                v_min, v_max = np.min(volume), np.max(volume)
+                if v_max > v_min:
+                    volume_norm = ((volume - v_min) / (v_max - v_min) * 255).astype(int)
+                else:
+                    volume_norm = volume.astype(int)
+                
+                def local_entropy_func(data):
+                    hist = np.histogram(data, bins=32, range=(0, 255))[0]
+                    hist = hist[hist > 0]
+                    if len(hist) > 1:
+                        return entropy(hist)
+                    return 0
+                
+                entropy_map = ndimage.generic_filter(
+                    volume_norm, local_entropy_func, size=window
+                )
+                return entropy_map.flatten()
+            else:
+                return np.zeros_like(np_scalars)
+        except ImportError:
+            print("⚠️ scipy not available, Entropy feature disabled")
+            return np.zeros_like(np_scalars)
+        except Exception as e:
+            print(f"⚠️ Entropy computation failed: {e}")
+            return np.zeros_like(np_scalars)
+    
     def normalize_data(self, np_scalars, np_gradient):
         """Normalize scalar and gradient data to 0-255 range."""
         raw_int_min, raw_int_max = np_scalars.min(), np_scalars.max()
@@ -214,3 +389,13 @@ class DatasetLoader:
             gradient_normalized = 255.0 * (np_gradient - raw_grad_min) / (raw_grad_max - raw_grad_min)
 
         return normalized_scalars, gradient_normalized, intensity_range, gradient_range
+
+    def normalize_single(self, data_array):
+        """Normalize a single data array to 0-255 range"""
+        data_min = np.min(data_array)
+        data_max = np.max(data_array)
+    
+        if data_max > data_min:
+            normalized = 255.0 * (data_array - data_min) / (data_max - data_min)
+            return normalized.astype(np.float32)
+        return np.zeros_like(data_array, dtype=np.float32)

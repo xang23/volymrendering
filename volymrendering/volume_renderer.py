@@ -5,15 +5,17 @@ from vtk.util import numpy_support
 class VolumeRenderer:
     def __init__(self, renderer_id="default"):
         self.renderer_id = renderer_id
-        
+    
         # Each instance gets its OWN COMPLETE VTK pipeline
         self.renderer = vtk.vtkRenderer()
-        self.mapper = vtk.vtkGPUVolumeRayCastMapper()
+        self.mapper = vtk.vtkGPUVolumeRayCastMapper()  # This is correct
+    
+        # The rest of your initialization...
         self.color_function = vtk.vtkColorTransferFunction()
         self.opacity_function = vtk.vtkPiecewiseFunction()
         self.volume_property = vtk.vtkVolumeProperty()
         self.volume = vtk.vtkVolume()
-        
+    
         self.setup_volume()
 
     # IN volume_renderer.py - ADD TO YOUR VolumeRenderer CLASS
@@ -147,11 +149,16 @@ class VolumeRenderer:
     def set_volume_data(self, image_data, reader=None):
         """Set volume data for THIS instance."""
         if reader is not None:
+            # If we have a reader, use its output port
             self.mapper.SetInputConnection(reader.GetOutputPort())
             print(f"Set volume data from reader for {self.renderer_id}")
         else:
+            # If no reader, use the image data directly
             self.mapper.SetInputData(image_data)
             print(f"Set volume data from image_data for {self.renderer_id}")
+    
+        # Force an update
+        self.mapper.Update()
 
     def reset_camera(self):
         """Reset camera for THIS instance."""

@@ -54,6 +54,11 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.setup_data_components()
         self.setup_dual_transfer_functions()
 
+        #ND
+        from nd_widget_manager import NDWidgetManager
+        self.nd_manager = NDWidgetManager()
+        self.tf_canvas.set_nd_callback(self.on_widget_moved_in_nd)
+
     def test_colored_widget(self):
         """Test with a clearly visible colored widget"""
         if not hasattr(self, 'tf_canvas'):
@@ -398,7 +403,7 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.point_canvas_container.setCurrentIndex(0)
         self.point_view_toggle.setChecked(False)
 
-        # SETUP WIDGET-BASED TF (right panel)
+       # SETUP WIDGET-BASED TF (right panel)
         print("Setting up widget-based TF...")
         self.tf_canvas = UnifiedTFCanvas(
             tf_type='2d',
@@ -406,34 +411,39 @@ class VolumeApp(QtWidgets.QMainWindow):
             gradient_data=self.gradient_normalized,
             update_callback=self.update_volume_from_widgets
         )
-    
+
         self.canvas_widget = TFCanvasWidget(self.tf_canvas, self, label='Reset TF View')
         self.widget_canvas_container.addWidget(self.canvas_widget)
 
         # CREATE WIDGET MANAGER BUT DON'T SHOW IT YET - it will be in separate window
         self.widget_manager = WidgetManager(self.tf_canvas)
 
-        # TEST WITH COLORED WIDGET INSTEAD OF DEFAULT WHITE
-        colored_widget = WidgetFactory.create_widget(
+        # ===== CREATE SINGLE VISIBLE WIDGET =====
+        visible_widget = WidgetFactory.create_widget(
             WidgetType.GAUSSIAN,
-            center_intensity=30,  # Where data is (based on your diagnostics)
+            center_intensity=30,      # Where your data is
             center_gradient=50,
             intensity_std=20,
             gradient_std=30,
             opacity=0.8,
-            color=(0.8, 0.2, 0.2),  # BRIGHT RED
+            color=(0.8, 0.2, 0.2),    # BRIGHT RED - VISIBLE!
             blend_mode='max'
         )
-    
-        self.tf_canvas.add_widget(colored_widget)
-        self.widget_manager.update_widget_list()
 
-        print("✅ Created colored widget for testing")
+        # ADD TO ND MANAGER (if available)
+        if hasattr(self, 'nd_manager'):
+            self.nd_manager.add_widget(visible_widget)
+            # Project to current view
+            projected = self.nd_manager.project_to_2d('Intensity', 'Gradient')
+            for widget in projected:
+                self.tf_canvas.add_widget(widget)
+        else:
+            # Fallback
+            self.tf_canvas.add_widget(visible_widget)
 
-        # Add initial widget
-        test_widget = WidgetFactory.create_widget(WidgetType.GAUSSIAN)
-        self.tf_canvas.add_widget(test_widget)
         self.widget_manager.update_widget_list()
+        print("✅ Created VISIBLE red widget")
+        # ========================================
 
         # Initialize with point-based TF (default active system)
         self.update_opacity_function(points_x, points_y, colors)
@@ -505,56 +515,63 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.vtkWidget_widget.setStyleSheet("border: 1px solid gray;")
 
     def safe_activate_nd_mode(self):
-        """Safely activate nD mode with feature matrix"""
+        """Activate nD mode with matrix browser"""
         print("🔄 Activating Feature Matrix mode...")
-        
-        # Check if we have the required components
-        if not hasattr(self, 'normalized_scalars') or not hasattr(self, 'tf_canvas'):
-            print("❌ Cannot activate nD mode: missing required components")
-            self.system_selector.setCurrentIndex(1)  # Fall back to widget mode
+    
+        if not hasattr(self, 'all_features') or not self.all_features:
+            print("❌ Cannot activate nD mode: no features loaded")
+            self.system_selector.setCurrentIndex(1)
             return
-            
+    
         try:
-            # Import and create MATRIX browser (not simple feature browser)
-            from simple_feature_browser import SimpleMatrixBrowser
-            
-            # Create feature data dictionary from your existing data
-            feature_data = {
-                'Intensity': self.normalized_scalars,
-                'Gradient': self.gradient_normalized
-            }
-            # Add more features here as needed:
-            # feature_data['Texture'] = your_texture_data
-            # feature_data['Curvature'] = your_curvature_data
-            
+            # Use already loaded features
+            feature_data = self.all_features
+        
             if self.feature_browser is None:
                 print("🔧 Creating feature matrix...")
+                from simple_feature_browser import SimpleMatrixBrowser
+            
                 self.feature_browser = SimpleMatrixBrowser(
                     feature_data_dict=feature_data,
-                    update_callback=self.on_matrix_cell_clicked
+                    update_callback=self.load_projection
                 )
-                
-                # Add to main layout (insert after toolbar, before dual view)
+            
+                # Add to layout
                 if hasattr(self, 'main_layout'):
-                    # Remove existing feature browser if any
                     if self.feature_browser.parent():
                         self.feature_browser.setParent(None)
                     self.main_layout.insertWidget(2, self.feature_browser)
-            
-            # Show the feature matrix
-            if self.feature_browser:
-                self.feature_browser.show()
-                feature_count = len(feature_data)
-                print(f"✅ Feature Matrix activated with {feature_count} features")
-                
-            # Use widget-based rendering
-            self.update_volume_from_widgets()
-            
+            else:
+                # Just update existing browser
+                self.feature_browser.feature_data = feature_data
+                self.feature_browser.update_matrix()
+        
+            # Update nD manager with all features
+            self.nd_manager.update_features(list(feature_data.keys()))
+        
+            # Migrate existing widgets to nD
+            if hasattr(self, 'tf_canvas'):
+                for widget in self.tf_canvas.widgets:
+                    if widget not in self.nd_manager.widgets:
+                        self.nd_manager.add_widget(widget)
+        
+            # Show matrix
+            self.feature_browser.show()
+            print(f"✅ Feature Matrix activated with {len(feature_data)} features")
+        
+            # Load initial projection (Intensity/Gradient if available)
+            if 'Intensity' in feature_data and 'Gradient' in feature_data:
+                self.load_projection('Intensity', 'Gradient')
+            else:
+                # Load first two features
+                keys = list(feature_data.keys())
+                self.load_projection(keys[0], keys[1])
+        
         except Exception as e:
-            print(f"❌ Failed to activate Feature Matrix: {e}")
-            self.system_selector.setCurrentIndex(1)  # Fall back to widget mode
-            QtWidgets.QMessageBox.warning(self, "nD Mode Error", 
-                                        f"Could not activate feature matrix:\n{e}")
+            print(f"❌ Failed to activate nD mode: {e}")
+            import traceback
+            traceback.print_exc()
+            self.system_selector.setCurrentIndex(1)
 
     def on_matrix_cell_clicked(self, feature_x, feature_y):
         """When user clicks a cell in the matrix - FIXED VERSION"""
@@ -841,26 +858,45 @@ class VolumeApp(QtWidgets.QMainWindow):
 
     def load_volume(self, file_path):
         """Load and process volume data for BOTH renderers"""
-        image_data, reader, np_scalars, np_gradient = self.dataset_loader.load_volume(file_path)
+        # FIX: Now receives 3 values from new dataset_loader
+        image_data, reader, all_features = self.dataset_loader.load_volume(file_path)
+    
+        # Extract primary data (Intensity) and Gradient
+        if 'Intensity' in all_features:
+            np_scalars = all_features['Intensity']
+        else:
+            # Take first feature as primary
+            first_key = list(all_features.keys())[0]
+            np_scalars = all_features[first_key]
+    
+        if 'Gradient' in all_features:
+            np_gradient = all_features['Gradient']
+        else:
+            np_gradient = np.zeros_like(np_scalars, dtype=np.float32)
+    
+        # Normalize data
         (self.normalized_scalars, self.gradient_normalized, 
          self.intensity_range, self.gradient_range) = self.dataset_loader.normalize_data(np_scalars, np_gradient)
 
         self.current_dataset_dir = os.path.dirname(file_path)
+    
+        # Store all features for nD mode
+        self.all_features = all_features
 
         # Set volume data for BOTH renderers
         self.volume_renderer.set_volume_data(image_data, reader)
         self.volume_renderer_widget.set_volume_data(image_data, reader)
-    
+
         # Update ALL TF systems
         self.update_tf_canvases()
-    
+
         # Reset widget positions for new data range
         self.reset_widget_tf_for_new_data()
-    
+
         # Reset cameras for BOTH renderers
         self.volume_renderer.reset_camera()
         self.volume_renderer_widget.reset_camera()
-    
+
         # Render BOTH windows
         self.vtkWidget_point.GetRenderWindow().Render()
         self.vtkWidget_widget.GetRenderWindow().Render()
@@ -979,6 +1015,130 @@ class VolumeApp(QtWidgets.QMainWindow):
             self.widget_manager_window.close()
         event.accept()
 
+    def on_widget_moved_in_nd(self, widget_2d, feat_x, feat_y, new_x, new_y):
+        """When widget moves in 2D projection, update nD coordinates"""
+        self.nd_manager.update_nd_position(widget_2d, new_x, new_y)
+
+    def load_projection(self, feat_x, feat_y):
+        """Load a specific 2D projection into the main view"""
+        print(f"🎯 Loading projection: {feat_x} vs {feat_y}")
+    
+        try:
+            # Get data for these features
+            if hasattr(self, 'feature_browser') and self.feature_browser:
+                feature_data = self.feature_browser.feature_data
+                data_x = feature_data[feat_x]
+                data_y = feature_data[feat_y]
+            
+                # Store current projection
+                self.active_projection = (feat_x, feat_y)
+            
+                # Update canvas data (these are ACTUAL data values, not normalized!)
+                self.tf_canvas.raw_data_x = data_x
+                self.tf_canvas.raw_data_y = data_y
+            
+                # ===== FIXED: Use normalize_single =====
+                self.tf_canvas.data = self.dataset_loader.normalize_single(data_x)
+                self.tf_canvas.gradient_data = self.dataset_loader.normalize_single(data_y)
+                # ======================================
+            
+                # Store ranges for this projection
+                self.tf_canvas.intensity_range = (float(np.min(data_x)), 
+                                                 float(np.max(data_x)))
+                self.tf_canvas.gradient_range = (float(np.min(data_y)), 
+                                                float(np.max(data_y)))
+            
+                # Set projection info
+                self.tf_canvas.set_projection_features(feat_x, feat_y)
+            
+                # Update nD manager with ranges for these features
+                if hasattr(self, 'nd_manager'):
+                    self.nd_manager.feature_ranges[feat_x] = self.tf_canvas.intensity_range
+                    self.nd_manager.feature_ranges[feat_y] = self.tf_canvas.gradient_range
+            
+                # Clear and load PROJECTED widgets
+                self.tf_canvas.clear_widgets()
+                projected = self.nd_manager.project_to_2d(feat_x, feat_y)
+                for widget in projected:
+                    self.tf_canvas.add_widget(widget)
+            
+                # Update canvas
+                self.tf_canvas._setup_canvas()
+                self.tf_canvas._draw()
+            
+                # Update volume
+                self.update_volume_from_widgets()
+            
+        except Exception as e:
+            print(f"❌ Error loading projection: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # Also make sure you have on_matrix_cell_clicked that calls this:
+    def on_matrix_cell_clicked(self, feature_x, feature_y):
+        """When user clicks a cell in the matrix"""
+        print(f"🎯 Matrix cell clicked: {feature_x} vs {feature_y}")
+        self.load_projection(feature_x, feature_y)  # ← Calls the new method
+
+   
+    def open_feature_popup(self, feat_x, feat_y):
+        """Open popup window for feature pair"""
+        print(f"🔷 Opening popup: {feat_x} vs {feat_y}")
+    
+        try:
+            # Get data for these features
+            if hasattr(self, 'feature_browser') and self.feature_browser:
+                feature_data = self.feature_browser.feature_data
+                data_x = feature_data[feat_y] #Swapped to see better data arches.
+                data_y = feature_data[feat_x]
+            
+                # Create popup
+                from nd_popup import NDFeaturePopup
+                popup = NDFeaturePopup(
+                    feat_y, feat_x, #Swapped for data arches
+                    data_x, data_y,
+                    self.nd_manager,
+                    parent=self
+                )
+            
+                # Position near the clicked cell
+                self.position_popup_near_cell(popup, feat_x, feat_y)
+            
+                # Show popup
+                popup.show()
+                popup.raise_()
+            
+                # Store reference (optional, for tracking)
+                if not hasattr(self, 'open_popups'):
+                    self.open_popups = []
+                self.open_popups.append(popup)
+            
+                # Clean up when closed
+                popup.destroyed.connect(lambda: self.open_popups.remove(popup))
+    
+        except Exception as e:
+            print(f"❌ Error opening popup: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def position_popup_near_cell(self, popup, feat_x, feat_y):
+        """Position popup near the clicked matrix cell"""
+        if not hasattr(self, 'feature_browser'):
+            return
+    
+        # Get matrix widget
+        matrix = self.feature_browser.matrix_widget
+    
+        # Find the cell position (simplified - you might need to calculate this)
+        row = self.feature_browser.feature_names.index(feat_y)
+        col = self.feature_browser.feature_names.index(feat_x)
+    
+        # Get cell widget
+        cell = matrix.layout().itemAtPosition(row+1, col+1).widget()
+        if cell:
+            # Get global position
+            global_pos = cell.mapToGlobal(cell.rect().topRight())
+            popup.move(global_pos.x() + 10, global_pos.y())
 
 # --------------------------- Main ---------------------------
 if __name__ == "__main__":
