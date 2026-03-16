@@ -1,6 +1,6 @@
 ﻿import sys
 import numpy as np
-
+import vtk
 # WidgetTF
 from widget_factory import WidgetFactory, WidgetType
 from unified_tf_canvas import UnifiedTFCanvas
@@ -22,7 +22,7 @@ import os
 import glob
 
 def show_project_structure():
-    print("📁 YOUR PROJECT STRUCTURE:")
+    print("YOUR PROJECT STRUCTURE:")
     for file in sorted(glob.glob("*.py")):
         print(f"  {file}")
     if os.path.exists("data"):
@@ -58,6 +58,9 @@ class VolumeApp(QtWidgets.QMainWindow):
         from nd_widget_manager import NDWidgetManager
         self.nd_manager = NDWidgetManager()
         self.tf_canvas.set_nd_callback(self.on_widget_moved_in_nd)
+        self.setup_artifact_analyzer_button()
+        
+        self.setup_quick_benchmark()
 
     def test_colored_widget(self):
         """Test with a clearly visible colored widget"""
@@ -81,7 +84,7 @@ class VolumeApp(QtWidgets.QMainWindow):
         
         self.tf_canvas.add_widget(colored_widget)
         
-        print(f"✅ Created BRIGHT RED widget at data location")
+        print(f"Created BRIGHT RED widget at data location")
         print(f"   Color: {colored_widget.color}")
         
         self.update_volume_from_widgets()
@@ -136,14 +139,14 @@ class VolumeApp(QtWidgets.QMainWindow):
         main_splitter.setSizes([600, 400])
 
         # Toolbar at the very top (not in splitter)
-        toolbar = self.create_toolbar()
+        self.toolbar = self.create_toolbar()
 
         # Make splitters more visible
         main_splitter.setStyleSheet("QSplitter::handle { background-color: #c0c0c0; }")
         render_splitter.setStyleSheet("QSplitter::handle { background-color: #a0a0a0; }")
         tf_splitter.setStyleSheet("QSplitter::handle { background-color: #a0a0a0; }")
 
-        self.main_layout.addLayout(toolbar)
+        self.main_layout.addLayout(self.toolbar)
         self.main_layout.addWidget(main_splitter)
 
         self.frame.setLayout(self.main_layout)
@@ -204,7 +207,7 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.point_reset_btn.clicked.connect(self.reset_point_view)
         controls.addWidget(self.point_reset_btn)
     
-        self.point_active_indicator = QtWidgets.QLabel("⚫ ACTIVE")
+        self.point_active_indicator = QtWidgets.QLabel(" ACTIVE")
         self.point_active_indicator.setStyleSheet("color: green; font-weight: bold;")
         controls.addWidget(self.point_active_indicator)
     
@@ -233,7 +236,7 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.widget_reset_btn.clicked.connect(self.reset_widget_view)
         controls.addWidget(self.widget_reset_btn)
 
-        self.widget_active_indicator = QtWidgets.QLabel("⚫ INACTIVE") 
+        self.widget_active_indicator = QtWidgets.QLabel(" INACTIVE") 
         self.widget_active_indicator.setStyleSheet("color: gray;")
         controls.addWidget(self.widget_active_indicator)
 
@@ -442,7 +445,7 @@ class VolumeApp(QtWidgets.QMainWindow):
             self.tf_canvas.add_widget(visible_widget)
 
         self.widget_manager.update_widget_list()
-        print("✅ Created VISIBLE red widget")
+        print("Created VISIBLE red widget")
         # ========================================
 
         # Initialize with point-based TF (default active system)
@@ -464,18 +467,18 @@ class VolumeApp(QtWidgets.QMainWindow):
     
         # Update UI indicators
         if system_type == 'point':
-            self.point_active_indicator.setText("⚫ ACTIVE")
+            self.point_active_indicator.setText(" ACTIVE")
             self.point_active_indicator.setStyleSheet("color: green; font-weight: bold;")
-            self.widget_active_indicator.setText("⚫ INACTIVE")
+            self.widget_active_indicator.setText(" INACTIVE")
             self.widget_active_indicator.setStyleSheet("color: gray;")
         
             # Highlight the active render window
             self.highlight_active_render('point')
         
         elif system_type == 'widget':
-            self.point_active_indicator.setText("⚫ INACTIVE")
+            self.point_active_indicator.setText(" INACTIVE")
             self.point_active_indicator.setStyleSheet("color: gray;")
-            self.widget_active_indicator.setText("⚫ ACTIVE")
+            self.widget_active_indicator.setText(" ACTIVE")
             self.widget_active_indicator.setStyleSheet("color: green; font-weight: bold;")
         
             # Highlight the active render window
@@ -489,9 +492,9 @@ class VolumeApp(QtWidgets.QMainWindow):
             self.update_volume_from_widgets()
             
         elif system_type == 'nd':  # nD mode - MATRIX IMPLEMENTATION
-            self.point_active_indicator.setText("⚫ INACTIVE")
+            self.point_active_indicator.setText(" INACTIVE")
             self.point_active_indicator.setStyleSheet("color: gray;")
-            self.widget_active_indicator.setText("⚫ INACTIVE") 
+            self.widget_active_indicator.setText(" INACTIVE") 
             self.widget_active_indicator.setStyleSheet("color: gray;")
             
             # ACTIVATE MATRIX MODE
@@ -516,10 +519,10 @@ class VolumeApp(QtWidgets.QMainWindow):
 
     def safe_activate_nd_mode(self):
         """Activate nD mode with matrix browser"""
-        print("🔄 Activating Feature Matrix mode...")
+        print("Activating Feature Matrix mode...")
     
         if not hasattr(self, 'all_features') or not self.all_features:
-            print("❌ Cannot activate nD mode: no features loaded")
+            print("Cannot activate nD mode: no features loaded")
             self.system_selector.setCurrentIndex(1)
             return
     
@@ -528,7 +531,7 @@ class VolumeApp(QtWidgets.QMainWindow):
             feature_data = self.all_features
         
             if self.feature_browser is None:
-                print("🔧 Creating feature matrix...")
+                print("Creating feature matrix...")
                 from simple_feature_browser import SimpleMatrixBrowser
             
                 self.feature_browser = SimpleMatrixBrowser(
@@ -557,7 +560,7 @@ class VolumeApp(QtWidgets.QMainWindow):
         
             # Show matrix
             self.feature_browser.show()
-            print(f"✅ Feature Matrix activated with {len(feature_data)} features")
+            print(f"Feature Matrix activated with {len(feature_data)} features")
         
             # Load initial projection (Intensity/Gradient if available)
             if 'Intensity' in feature_data and 'Gradient' in feature_data:
@@ -568,14 +571,14 @@ class VolumeApp(QtWidgets.QMainWindow):
                 self.load_projection(keys[0], keys[1])
         
         except Exception as e:
-            print(f"❌ Failed to activate nD mode: {e}")
+            print(f"Failed to activate nD mode: {e}")
             import traceback
             traceback.print_exc()
             self.system_selector.setCurrentIndex(1)
 
     def on_matrix_cell_clicked(self, feature_x, feature_y):
         """When user clicks a cell in the matrix - FIXED VERSION"""
-        print(f"🎯 Loading into main TF: {feature_x} vs {feature_y}")
+        print(f"Loading into main TF: {feature_x} vs {feature_y}")
     
         try:
             feature_data = self.feature_browser.feature_data
@@ -591,29 +594,29 @@ class VolumeApp(QtWidgets.QMainWindow):
             self.tf_canvas._setup_canvas()
             self.tf_canvas._draw()
         
-            print(f"✅ Canvas updated with {feature_x} vs {feature_y}")
-            print(f"📊 New ranges: intensity={self.tf_canvas.intensity_range}, gradient={self.tf_canvas.gradient_range}")
+            print(f"Canvas updated with {feature_x} vs {feature_y}")
+            print(f"New ranges: intensity={self.tf_canvas.intensity_range}, gradient={self.tf_canvas.gradient_range}")
         
             # Update volume rendering
             self.update_volume_from_widgets()
         
         except Exception as e:
-            print(f"❌ Error updating main TF: {e}")
+            print(f"Error updating main TF: {e}")
             import traceback
             traceback.print_exc()
 
     def update_volume_from_widgets(self):
         """Update volume from widget-based TF with PROPER SCALING"""
         if self._active_tf_system not in ['widget', 'nd']:
-            print(f"⚠️ Widget system not active ({self._active_tf_system})")
+            print(f"Widget system not active ({self._active_tf_system})")
             return
 
         # Get samples
         samples = self.tf_canvas.sample_for_vtk()
 
         # DEBUG: Check what we got
-        print(f"📊 Got {len(samples) if samples else 0} samples")
-        print(f"📊 Has cached gradient? {hasattr(self.tf_canvas, '_cached_gradient_opacity')}")
+        print(f"Got {len(samples) if samples else 0} samples")
+        print(f"Has cached gradient? {hasattr(self.tf_canvas, '_cached_gradient_opacity')}")
 
         if samples:
             intensities = [s[0] for s in samples]  # 0-255 values
@@ -621,7 +624,7 @@ class VolumeApp(QtWidgets.QMainWindow):
             colors = [s[2] for s in samples]
         
             # DEBUG: Show what widgets produced
-            print(f"📊 Widget samples: intensity={min(intensities)}-{max(intensities)} "
+            print(f"Widget samples: intensity={min(intensities)}-{max(intensities)} "
                   f"opacity={min(opacities):.3f}-{max(opacities):.3f}")
     
             # SCALE intensities from 0-255 to actual range
@@ -631,7 +634,7 @@ class VolumeApp(QtWidgets.QMainWindow):
                 scaled = int_min + (i / 255.0) * (int_max - int_min)
                 scaled_intensities.append(scaled)
         
-            print(f"📊 Scaled intensities: {min(intensities)}-{max(intensities)} → "
+            print(f"Scaled intensities: {min(intensities)}-{max(intensities)} → "
                   f"{min(scaled_intensities):.1f}-{max(scaled_intensities):.1f}")
         
             # SCALE gradient opacity too
@@ -641,7 +644,7 @@ class VolumeApp(QtWidgets.QMainWindow):
         
                 # Check if it's a numpy array or dict
                 if isinstance(gradient_op, np.ndarray):
-                    print(f"📊 Gradient opacity is numpy array with shape: {gradient_op.shape}")
+                    print(f"Gradient opacity is numpy array with shape: {gradient_op.shape}")
                 
                     # SCALE gradient opacity!
                     grad_min, grad_max = self.gradient_range
@@ -655,12 +658,12 @@ class VolumeApp(QtWidgets.QMainWindow):
                             gradient_opacities.append((scaled_g, gradient_op[g]))
                             non_zero_count += 1
                 
-                    print(f"📊 Extracted {non_zero_count} gradient points (scaled)")
+                    print(f"Extracted {non_zero_count} gradient points (scaled)")
                     if gradient_opacities:
-                        print(f"📊 Scaled gradient range: {grad_min:.1f}-{grad_max:.1f}")
+                        print(f"Scaled gradient range: {grad_min:.1f}-{grad_max:.1f}")
             
                 elif isinstance(gradient_op, dict):
-                    print(f"📊 Gradient opacity is dict with {len(gradient_op)} entries")
+                    print(f"Gradient opacity is dict with {len(gradient_op)} entries")
                     # Scale dict entries
                     grad_min, grad_max = self.gradient_range
                     gradient_opacities = []
@@ -668,22 +671,22 @@ class VolumeApp(QtWidgets.QMainWindow):
                         scaled_g = grad_min + (g / 255.0) * (grad_max - grad_min)
                         gradient_opacities.append((scaled_g, opacity))
                 else:
-                    print(f"⚠️ Unknown gradient opacity type: {type(gradient_op)}")
+                    print(f"Unknown gradient opacity type: {type(gradient_op)}")
             else:
-                print(f"⚠️ No cached gradient opacity found!")
+                print(f"No cached gradient opacity found!")
 
             # Update renderer - DEBUG output
-            print(f"🎯 Updating widget renderer with {len(scaled_intensities)} intensity points")
+            print(f"Updating widget renderer with {len(scaled_intensities)} intensity points")
             if gradient_opacities:
-                print(f"🎯 And {len(gradient_opacities)} gradient opacity points")
+                print(f"And {len(gradient_opacities)} gradient opacity points")
         
             # Check if opacities are reasonable
             if max(opacities) < 0.05:
-                print(f"⚠️ WARNING: Maximum opacity is very low ({max(opacities):.3f})")
-                print(f"   Widgets may not be visible. Try increasing widget opacity.")
+                print(f"WARNING: Maximum opacity is very low ({max(opacities):.3f})")
+                print(f"Widgets may not be visible. Try increasing widget opacity.")
     
             # DEBUG: Show first few scaled points
-            print(f"📋 First 3 scaled points to VTK:")
+            print(f"First 3 scaled points to VTK:")
             for i in range(min(3, len(scaled_intensities))):
                 print(f"   {i}: Intensity={scaled_intensities[i]:.1f} "
                       f"(was {intensities[i]} 0-255), Opacity={opacities[i]:.3f}")
@@ -700,18 +703,18 @@ class VolumeApp(QtWidgets.QMainWindow):
 
             # Render
             self.vtkWidget_widget.GetRenderWindow().Render()
-            print("✅ Render complete")
+            print("Render complete")
 
     def update_opacity_function(self, xs, ys, colors):
         """Update point-based TF - this should still work"""
         # DEBUG: Check what point-based TF is sending
-        print(f"📊 Point-based TF sending {len(xs)} points")
+        print(f"Point-based TF sending {len(xs)} points")
         print(f"   First point: {xs[0]:.1f}, color: {colors[0]}")
         print(f"   Last point: {xs[-1]:.1f}, color: {colors[-1]}")
         if self._active_tf_system != 'point':
             return
             """Update point-based TF"""
-        print(f"📊 Point-based TF sending {len(xs)} points")
+        print(f"Point-based TF sending {len(xs)} points")
         print(f"   Points:")
         for i in range(len(xs)):
             print(f"     {i}: Intensity={xs[i]:.1f}, Opacity={ys[i]:.3f}, Color={colors[i]}")
@@ -791,7 +794,7 @@ class VolumeApp(QtWidgets.QMainWindow):
 
     def update_opacity_function_from_1d(self, xs, ys, colors):
         """Update from 1D canvas - CONVERT from display to actual range!"""
-        print(f"📊 1D TF callback: Received {len(xs)} points in DISPLAY coordinates (0-255)")
+        print(f"1D TF callback: Received {len(xs)} points in DISPLAY coordinates (0-255)")
     
         # Convert from 0-255 display to actual data range
         int_min, int_max = self.intensity_range
@@ -814,7 +817,7 @@ class VolumeApp(QtWidgets.QMainWindow):
 
     def update_opacity_function_from_2d(self, xs, ys, colors):
         """Update from 2D canvas - CONVERT if needed"""
-        print(f"📊 2D TF callback: Received {len(xs)} points")
+        print(f"2D TF callback: Received {len(xs)} points")
     
         # Check if xs are in display coordinates (0-255)
         if max(xs) <= 255.0:
@@ -927,9 +930,9 @@ class VolumeApp(QtWidgets.QMainWindow):
             self.tf_canvas.gradient_data = self.gradient_normalized
             self.tf_canvas._setup_canvas()  # Force complete refresh
             self.tf_canvas._draw()
-            print("✅ Updated widget-based TF")
+            print("Updated widget-based TF")
         
-        print(f"📊 New data ranges - Intensity: {self.intensity_range}, Gradient: {self.gradient_range}")
+        print(f"New data ranges - Intensity: {self.intensity_range}, Gradient: {self.gradient_range}")
 
     def reset_widget_tf_for_new_data(self):
         """Completely reset widget TF system for new dataset"""
@@ -986,7 +989,7 @@ class VolumeApp(QtWidgets.QMainWindow):
     
         # FIX: Check if tf_data is None
         if tf_data is None:
-            print("⚠️ Failed to load TF, keeping current")
+            print("Failed to load TF, keeping current")
             return
         
         # Now safe to unpack
@@ -1021,7 +1024,7 @@ class VolumeApp(QtWidgets.QMainWindow):
 
     def load_projection(self, feat_x, feat_y):
         """Load a specific 2D projection into the main view"""
-        print(f"🎯 Loading projection: {feat_x} vs {feat_y}")
+        print(f"Loading projection: {feat_x} vs {feat_y}")
     
         try:
             # Get data for these features
@@ -1070,20 +1073,20 @@ class VolumeApp(QtWidgets.QMainWindow):
                 self.update_volume_from_widgets()
             
         except Exception as e:
-            print(f"❌ Error loading projection: {e}")
+            print(f"Error loading projection: {e}")
             import traceback
             traceback.print_exc()
 
     # Also make sure you have on_matrix_cell_clicked that calls this:
     def on_matrix_cell_clicked(self, feature_x, feature_y):
         """When user clicks a cell in the matrix"""
-        print(f"🎯 Matrix cell clicked: {feature_x} vs {feature_y}")
+        print(f"Matrix cell clicked: {feature_x} vs {feature_y}")
         self.load_projection(feature_x, feature_y)  # ← Calls the new method
 
    
     def open_feature_popup(self, feat_x, feat_y):
         """Open popup window for feature pair"""
-        print(f"🔷 Opening popup: {feat_x} vs {feat_y}")
+        print(f"Opening popup: {feat_x} vs {feat_y}")
     
         try:
             # Get data for these features
@@ -1117,7 +1120,7 @@ class VolumeApp(QtWidgets.QMainWindow):
                 popup.destroyed.connect(lambda: self.open_popups.remove(popup))
     
         except Exception as e:
-            print(f"❌ Error opening popup: {e}")
+            print(f"Error opening popup: {e}")
             import traceback
             traceback.print_exc()
 
@@ -1139,6 +1142,91 @@ class VolumeApp(QtWidgets.QMainWindow):
             # Get global position
             global_pos = cell.mapToGlobal(cell.rect().topRight())
             popup.move(global_pos.x() + 10, global_pos.y())
+
+    def setup_quick_benchmark(self):
+        """Add a simple benchmark button to your toolbar"""
+        
+        # Add to existing toolbar (simplest!)
+        self.benchmark_btn = QtWidgets.QPushButton("Benchmark Current TF")
+        self.benchmark_btn.clicked.connect(self.run_quick_benchmark)
+        self.toolbar.addWidget(self.benchmark_btn)  # Add to your existing toolbar
+        
+        # Small status label
+        self.benchmark_status = QtWidgets.QLabel("Ready")
+        self.toolbar.addWidget(self.benchmark_status)
+
+    def run_quick_benchmark(self):
+        """Run a quick 100-frame benchmark on current widgets"""
+        import time
+        import csv
+        from datetime import datetime
+        
+        self.benchmark_status.setText("Running...")
+        QtWidgets.QApplication.processEvents()
+        
+        # Get current widget info
+        widget_info = []
+        for i, w in enumerate(self.nd_manager.widgets):
+            widget_info.append(f"{w.widget_type.value}({w.center_intensity:.0f},{w.center_gradient:.0f})")
+        
+        # Run 100 renders
+        times = []
+        for i in range(100):
+            start = time.perf_counter()
+            self.vtkWidget_widget.GetRenderWindow().Render()
+            end = time.perf_counter()
+            times.append((end - start) * 1000)  # ms
+        
+        # Calculate stats
+        avg_time = sum(times) / len(times)
+        fps = 1000 / avg_time
+        
+        # Save screenshot
+        filename = f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        self.take_screenshot(filename)
+        
+        # Save to CSV
+        with open('benchmark_results.csv', 'a', newline='') as f:
+            writer = csv.writer(f)
+            if f.tell() == 0:
+                writer.writerow(['Date', 'Widgets', 'Avg(ms)', 'FPS', 'Screenshot'])
+            writer.writerow([datetime.now().isoformat(), '+'.join(widget_info), 
+                            f"{avg_time:.2f}", f"{fps:.1f}", filename])
+        
+        # Show result
+        self.benchmark_status.setText(f"FPS: {fps:.1f} | {avg_time:.2f}ms")
+        
+        # Optional: popup with details
+        QtWidgets.QMessageBox.information(self, "Benchmark Complete", 
+            f"Average: {avg_time:.2f} ms\nFPS: {fps:.1f}\nScreenshot saved")
+
+    def take_screenshot(self, filename):
+        """Save current render view to file"""
+        w = self.vtkWidget_widget.GetRenderWindow()
+        image = vtk.vtkWindowToImageFilter()
+        image.SetInput(w)
+        image.Update()
+        
+        writer = vtk.vtkPNGWriter()
+        writer.SetFileName(filename)
+        writer.SetInputConnection(image.GetOutputPort())
+        writer.Write()
+
+    def setup_artifact_analyzer_button(self):
+        """Add button to open artifact analyzer"""
+        self.analyzer_btn = QtWidgets.QPushButton("🔬 Artifact Analyzer")
+        self.analyzer_btn.clicked.connect(self.open_artifact_analyzer)
+        self.toolbar.addWidget(self.analyzer_btn)
+
+    def open_artifact_analyzer(self):
+        """Open the artifact analyzer as a separate window"""
+        try:
+            from artifact_analyzer import ArtifactAnalyzer
+            self.analyzer = ArtifactAnalyzer(self)
+            self.analyzer.show()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", 
+                f"Could not open Artifact Analyzer:\n{str(e)}")
 
 # --------------------------- Main ---------------------------
 if __name__ == "__main__":
