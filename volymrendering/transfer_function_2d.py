@@ -7,7 +7,7 @@ import PyQt5.QtWidgets as QtWidgets
 
 
 class TransferFunction2D(BaseTransferFunction):
-    def __init__(self, raw_hist2d, intensity_range, gradient_range, log_toggle_checkbox=None):
+    def __init__(self, raw_hist2d, intensity_range, gradient_range, log_toggle_checkbox=None, x_label="Intensity", y_label="Gradient Magnitude"):
         super().__init__(figsize=(5, 5))
     
         self.raw = raw_hist2d
@@ -15,6 +15,9 @@ class TransferFunction2D(BaseTransferFunction):
         self.int_range = (0, 255)
         self.grad_range = (0, 255)
         self.log_checkbox = log_toggle_checkbox
+        self.x_label = x_label
+        self.y_label = y_label
+
 
         # Initialize with default TF
         self.points_x = [0.0, 255.0]
@@ -245,7 +248,14 @@ class TransferFunction2D(BaseTransferFunction):
             self.ax.set_ylim(new_ylim)
 
     # ===== CRITICAL: Override notification to update 1D view =====
-    
+    def update_labels(self, x_label, y_label):
+        """Update the axis labels"""
+        self.x_label = x_label
+        self.y_label = y_label
+        self.ax.set_xlabel(x_label)
+        self.ax.set_ylabel(y_label)
+        self.draw()
+
     def _notify_app(self):
         """Notify the main app about TF changes."""
         w = self.parent()

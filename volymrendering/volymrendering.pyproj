@@ -25,7 +25,9 @@
     <Compile Include="base_transfer_function.py" />
     <Compile Include="convert_tfs.py" />
     <Compile Include="dataset_loader.py" />
+    <Compile Include="multicomponent_renderer.py" />
     <Compile Include="nd_popup.py" />
+    <Compile Include="nd_shader_renderer.py" />
     <Compile Include="nd_widget_manager.py" />
     <Compile Include="old.py" />
     <Compile Include="simple_feature_browser.py" />

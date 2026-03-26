@@ -64,48 +64,39 @@ class NDWidgetManager:
         return widget
     
     def project_to_2d(self, feat_x, feat_y):
-        """Project nD widgets to 2D plane - returns RAW coordinates"""
+        """Project nD widgets to 2D plane - returns DISPLAY coordinates (0-255)"""
         projected = []
 
         for nd_widget in self.widgets:
             widget_2d = copy(nd_widget)
         
             # ===== CRITICAL: Store reference to original nD widget =====
-            widget_2d.nd_ref = nd_widget  # ← ADD THIS!
-            widget_2d.projection = (feat_x, feat_y)  # ← ADD THIS!
+            widget_2d.nd_ref = nd_widget
+            widget_2d.projection = (feat_x, feat_y)
             # =========================================================
     
             # Get display coordinates (0-255) from nD storage
             display_x = nd_widget.nd_coords.get(feat_x, 128)
             display_y = nd_widget.nd_coords.get(feat_y, 128)
-    
-            # Convert to RAW data coordinates using stored ranges
-            if feat_x in self.feature_ranges:
-                x_min, x_max = self.feature_ranges[feat_x]
-                # Convert 0-255 → raw data
-                raw_x = x_min + (display_x / 255.0) * (x_max - x_min)
-                widget_2d.center_intensity = raw_x
         
-                # Scale size too
-                if hasattr(widget_2d, 'intensity_std'):
-                    std_display = nd_widget.nd_scales.get(feat_x, 30)
-                    widget_2d.intensity_std = (std_display / 255.0) * (x_max - x_min)
-    
-            if feat_y in self.feature_ranges:
-                y_min, y_max = self.feature_ranges[feat_y]
-                raw_y = y_min + (display_y / 255.0) * (y_max - y_min)
-                widget_2d.center_gradient = raw_y
+            # ===== FIX: Use display coordinates directly =====
+            widget_2d.center_intensity = display_x  # ← 0-255, not raw!
+            widget_2d.center_gradient = display_y   # ← 0-255, not raw!
         
-                if hasattr(widget_2d, 'gradient_std'):
-                    std_display = nd_widget.nd_scales.get(feat_y, 30)
-                    widget_2d.gradient_std = (std_display / 255.0) * (y_max - y_min)
+            print(f"   Projected: {feat_x}={display_x:.1f}, {feat_y}={display_y:.1f}")  # Debug
+            # Scales stay in display space too
+            if hasattr(widget_2d, 'intensity_std'):
+                widget_2d.intensity_std = nd_widget.nd_scales.get(feat_x, 30)
+            if hasattr(widget_2d, 'gradient_std'):
+                widget_2d.gradient_std = nd_widget.nd_scales.get(feat_y, 30)
+            # =================================================
     
             projected.append(widget_2d)
 
         return projected
     
-    def update_nd_position(self, widget_2d, new_x, new_y):
-        """Update nD coordinates when widget moves in 2D (with inverse scaling)"""
+    """def update_nd_position(self, widget_2d, new_x, new_y):
+        """"""Update nD coordinates when widget moves in 2D (with inverse scaling)""""""
         if hasattr(widget_2d, 'nd_ref'):
             feat_x, feat_y = widget_2d.projection
             
@@ -127,4 +118,24 @@ class NDWidgetManager:
             else:
                 # No scaling needed
                 widget_2d.nd_ref.nd_coords[feat_x] = new_x
-                widget_2d.nd_ref.nd_coords[feat_y] = new_y
+                widget_2d.nd_ref.nd_coords[feat_y] = new_y"""
+    def update_nd_position(self, widget_2d, new_x, new_y):
+        """Update nD coordinates when widget moves in 2D"""
+        if hasattr(widget_2d, 'nd_ref'):
+            feat_x, feat_y = widget_2d.projection
+        
+            # new_x and new_y are already in DISPLAY SPACE (0-255)
+            # Store them directly - NO SCALING!
+            widget_2d.nd_ref.nd_coords[feat_x] = new_x
+            widget_2d.nd_ref.nd_coords[feat_y] = new_y
+        
+            # Also update the 2D widget's position for display
+            widget_2d.center_intensity = new_x
+            widget_2d.center_gradient = new_y
+        
+            print(f"   Updated nD coords: {feat_x}={new_x:.1f}, {feat_y}={new_y:.1f}")  # Debug
+
+    def debug_widgets(self):
+        print(f"\n🔍 Current widgets in nd_manager ({len(self.widgets)}):")
+        for i, w in enumerate(self.widgets):
+            print(f"   Widget {i}: {w.nd_coords}")

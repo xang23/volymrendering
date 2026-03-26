@@ -178,8 +178,16 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
         return widget
         
     def on_cell_clicked(self, feat_x, feat_y):
-        """Handle cell clicks - open popup window"""
-        print(f"🎯 Matrix cell clicked: {feat_x} vs {feat_y}")
+        """Handle cell clicks with debounce"""
+        print(f"Matrix cell clicked: {feat_x} vs {feat_y}")
+    
+        # Skip diagonal
+        if feat_x == feat_y:
+            print("   Diagonal cell - skipping")
+            return
+    
+        # Simple debounce - disable temporarily
+        self.setEnabled(False)
     
         # Find the main app window
         parent = self
@@ -187,11 +195,11 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
             parent = parent.parent()
     
         if parent and hasattr(parent, 'open_feature_popup'):
-            # Open popup from main app
             parent.open_feature_popup(feat_x, feat_y)
-        elif self.update_callback:
-            # Fallback to old behavior
-            self.update_callback(feat_x, feat_y)
+    
+        # Re-enable after short delay
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(500, lambda: self.setEnabled(True))
             
     def update_matrix(self):
         """Update matrix with new feature data"""

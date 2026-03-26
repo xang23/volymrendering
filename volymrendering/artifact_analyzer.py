@@ -1,4 +1,4 @@
-# artifact_analyzer.py
+﻿# artifact_analyzer.py
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import Qt
 import numpy as np
@@ -498,46 +498,55 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         self.run_all_tests_with_current_widgets(name)
     
     def convert_tf_to_widgets(self, tf_data):
-        """Convert a point-based TF to widget format"""
+        """Convert a point-based TF to widget format - WITH PROPER NORMALIZATION"""
         from widget_factory import WidgetFactory, WidgetType
-        
+    
         # Clear existing widgets
         self.nd_manager.widgets.clear()
-        
+    
         # Get TF points
         xs = tf_data.get('x_abs', tf_data.get('x_rel', []))
         ys = tf_data.get('y', [])
         colors = tf_data.get('colors', [])
-        
+    
+        # Get data range from main app
+        int_min, int_max = self.main_app.intensity_range
+        print(f"Converting TF with data range: [{int_min:.1f}, {int_max:.1f}]")
+    
         # Use neutral color for all widgets
         NEUTRAL_COLOR = (1.0, 1.0, 1.0)
-        
+    
         # Create a widget for each significant point
         for i, (x, y, color) in enumerate(zip(xs, ys, colors)):
             if y < 0.05:  # Skip very low opacity
                 continue
-            
-            # Scale to 0-255 range if needed
-            if max(xs) > 255:  # If in data space
-                int_min, int_max = self.main_app.intensity_range
+        
+            # ===== CRITICAL: Normalize to 0-255 display space =====
+            if int_max > int_min:
                 x_display = 255.0 * (x - int_min) / (int_max - int_min)
             else:
-                x_display = x
-            
-            # Create Gaussian widget at this point
+                x_display = 128  # Default if range is zero
+        
+            # Clamp to valid range
+            x_display = max(0, min(255, x_display))
+        
+            print(f"Point {i}: Raw {x:.1f} → Display {x_display:.1f}")
+            # ======================================================
+        
+            # Create Gaussian widget at this point (in display space!)
             widget = WidgetFactory.create_widget(
                 WidgetType.GAUSSIAN,
-                center_intensity=x_display,
-                center_gradient=128,
-                intensity_std=15,
+                center_intensity=x_display,  # ← Now in 0-255!
+                center_gradient=128,  # Default gradient
+                intensity_std=15,  # In display space
                 gradient_std=30,
                 opacity=y,
-                color=NEUTRAL_COLOR,  # Use neutral color
+                color=NEUTRAL_COLOR,
                 blend_mode='max'
             )
             self.nd_manager.add_widget(widget)
-        
-        print(f"Converted {len(self.nd_manager.widgets)} TF points to widgets")
+    
+        print(f"Converted {len(self.nd_manager.widgets)} TF points to widgets (all in 0-255 space)")
     
     def setup_feature_selection(self):
         """Dialog for selecting which feature pairs to test"""
