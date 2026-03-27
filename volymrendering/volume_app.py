@@ -786,7 +786,34 @@ class VolumeApp(QtWidgets.QMainWindow):
         event.accept()
 
     def on_widget_moved_in_nd(self, widget_2d, feat_x, feat_y, new_x, new_y):
+        """Handle widget movement from 2D canvas"""
+        print(f"Widget moved: ({new_x:.1f}, {new_y:.1f})")
+    
+        # Store the active widget index before update
+        if hasattr(self.tf_canvas, 'active_widget'):
+            old_active_idx = self.tf_canvas.active_widget
+    
+        # Update the nD manager
         self.nd_manager.update_nd_position(widget_2d, new_x, new_y)
+    
+        # Restore active widget if it's the same object
+        if hasattr(self.tf_canvas, 'active_widget') and self.tf_canvas.active_widget is not None:
+            if self.tf_canvas.active_widget < len(self.tf_canvas.widgets):
+                current_widget = self.tf_canvas.widgets[self.tf_canvas.active_widget]
+                if current_widget is not widget_2d:
+                    # Find the new index of the moved widget
+                    try:
+                        new_idx = self.tf_canvas.widgets.index(widget_2d)
+                        self.tf_canvas.active_widget = new_idx
+                    except ValueError:
+                        pass
+    
+        # Update widget manager if needed
+        if hasattr(self, 'widget_manager') and self.widget_manager:
+            self.widget_manager.update_widget_list()
+    
+        # Refresh the render
+        self.update_volume_from_widgets()
 
     def load_projection(self, feat_x, feat_y):
         print(f"Loading projection: {feat_x} vs {feat_y}")
@@ -796,36 +823,52 @@ class VolumeApp(QtWidgets.QMainWindow):
                 feature_data = self.feature_browser.feature_data
                 data_x = feature_data[feat_x]
                 data_y = feature_data[feat_y]
-        
+    
                 self.active_projection = (feat_x, feat_y)
-        
+    
                 self.tf_canvas.raw_data_x = data_x
                 self.tf_canvas.raw_data_y = data_y
-        
+    
                 self.tf_canvas.data = self.dataset_loader.normalize_single(data_x)
                 self.tf_canvas.gradient_data = self.dataset_loader.normalize_single(data_y)
-        
+    
                 self.tf_canvas.intensity_range = (float(np.min(data_x)), float(np.max(data_x)))
                 self.tf_canvas.gradient_range = (float(np.min(data_y)), float(np.max(data_y)))
-        
+    
                 self.tf_canvas.set_projection_features(feat_x, feat_y)
-        
+    
                 # Update the axis labels
                 self.tf_canvas.update_axis_labels(feat_x, feat_y)
-        
+    
                 if hasattr(self, 'nd_manager'):
                     self.nd_manager.feature_ranges[feat_x] = self.tf_canvas.intensity_range
                     self.nd_manager.feature_ranges[feat_y] = self.tf_canvas.gradient_range
-        
+    
+                # IMPORTANT: Preserve the mapping between 2D widgets and nD widgets
+                # Instead of clearing all widgets, update their positions
+                existing_2d_widgets = self.tf_canvas.widgets.copy()
+                projected_widgets = self.nd_manager.project_to_2d(feat_x, feat_y)
+            
+                # Clear the canvas
                 self.tf_canvas.clear_widgets()
-                projected = self.nd_manager.project_to_2d(feat_x, feat_y)
-                for widget in projected:
+            
+                # Add the projected widgets (which should be the same objects)
+                for widget in projected_widgets:
                     self.tf_canvas.add_widget(widget)
-        
+            
+                # Restore active widget if it exists in the new projection
+                if hasattr(self.tf_canvas, 'active_widget') and self.tf_canvas.active_widget is not None:
+                    old_active = self.tf_canvas.widgets[self.tf_canvas.active_widget] if self.tf_canvas.active_widget < len(self.tf_canvas.widgets) else None
+                    if old_active and old_active in projected_widgets:
+                        new_idx = projected_widgets.index(old_active)
+                        self.tf_canvas.active_widget = new_idx
+                    else:
+                        self.tf_canvas.active_widget = None
+    
                 self.tf_canvas._setup_canvas()
                 self.tf_canvas._draw()
                 self.update_volume_from_widgets()
-        
+    
         except Exception as e:
             print(f"Error loading projection: {e}")
             import traceback

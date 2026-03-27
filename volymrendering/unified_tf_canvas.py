@@ -340,39 +340,87 @@ class UnifiedTFCanvas(BaseTransferFunction):
         """Handle mouse press for widget interaction"""
         if event.inaxes != self.ax:
             return
-    
+
         click_x_data = event.xdata
         click_y_data = event.ydata
-    
+
         if getattr(event, 'button', None) == 1:
             try:
                 mods = event.guiEvent.modifiers()
             except Exception:
                 mods = 0
-        
+    
             if mods & Qt.ShiftModifier:
+                # Color picker mode - find the closest widget
+                closest_idx = None
+                closest_dist = float('inf')
                 for i, widget in enumerate(self.widgets):
                     distance = np.sqrt((click_x_data - widget.center_intensity)**2 + 
                                      (click_y_data - widget.center_gradient)**2)
-                    if distance < (self.intensity_range[1] - self.intensity_range[0]) * 0.05:
-                        qcolor = QtWidgets.QColorDialog.getColor()
-                        if qcolor.isValid():
-                            widget.color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
-                            self._draw()
-                            self._notify_app()
-                        return
+                    if distance < 15 and distance < closest_dist:
+                        closest_idx = i
+                        closest_dist = distance
+            
+                if closest_idx is not None:
+                    widget = self.widgets[closest_idx]
+                    qcolor = QtWidgets.QColorDialog.getColor()
+                    if qcolor.isValid():
+                        widget.color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
+                        self._draw()
+                        self._notify_app()
+                    return
 
+        # Find the closest widget for selection/dragging
+        closest_widget_idx = None
+        closest_distance = float('inf')
+        threshold = 15  # 15 pixels in data coordinates
+    
         for i, widget in enumerate(self.widgets):
             distance = np.sqrt((click_x_data - widget.center_intensity)**2 + 
                              (click_y_data - widget.center_gradient)**2)
-            threshold = (self.intensity_range[1] - self.intensity_range[0]) * 0.05
-            if distance < threshold:
-                self.active_widget = i
-                self.dragging_widget = True
-                self._draw()
-                return
-        
+            if distance < threshold and distance < closest_distance:
+                closest_widget_idx = i
+                closest_distance = distance
+    
+        if closest_widget_idx is not None:
+            self.active_widget = closest_widget_idx
+            self.dragging_widget = True
+            self._draw()
+            print(f"✅ Selected widget {closest_widget_idx} at distance {closest_distance:.1f}")
+            return
+    
         super().on_press(event)
+
+    def on_motion(self, event):
+        """Handle mouse motion for widget dragging"""
+        if self.dragging_widget and event.inaxes == self.ax and self.active_widget is not None:
+            # Store the active widget reference before potential list modifications
+            active_widget = self.widgets[self.active_widget]
+        
+            # Update position
+            new_x = event.xdata
+            new_y = event.ydata
+        
+            # Clamp to canvas bounds
+            new_x = max(0, min(255, new_x))
+            new_y = max(0, min(255, new_y))
+        
+            active_widget.center_intensity = new_x
+            active_widget.center_gradient = new_y
+    
+            # Notify nD manager about the move
+            if hasattr(active_widget, 'nd_ref') and hasattr(self, 'projection_x'):
+                if hasattr(self, 'nd_update_callback'):
+                    self.nd_update_callback(
+                        active_widget, 
+                        self.projection_x, self.projection_y,
+                        new_x, new_y
+                    )
+        
+            self._draw()
+            self._notify_app()
+        else:
+            super().on_motion(event)
     
     def on_motion(self, event):
         """Handle mouse motion for widget dragging"""
