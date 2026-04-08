@@ -119,21 +119,18 @@ class NDWidgetManager:
                 # No scaling needed
                 widget_2d.nd_ref.nd_coords[feat_x] = new_x
                 widget_2d.nd_ref.nd_coords[feat_y] = new_y"""
-    def update_nd_position(self, widget_2d, new_x, new_y):
-        """Update nD coordinates when widget moves in 2D"""
-        if hasattr(widget_2d, 'nd_ref'):
-            feat_x, feat_y = widget_2d.projection
-        
-            # new_x and new_y are already in DISPLAY SPACE (0-255)
-            # Store them directly - NO SCALING!
-            widget_2d.nd_ref.nd_coords[feat_x] = new_x
-            widget_2d.nd_ref.nd_coords[feat_y] = new_y
-        
-            # Also update the 2D widget's position for display
-            widget_2d.center_intensity = new_x
-            widget_2d.center_gradient = new_y
-        
-            print(f"   Updated nD coords: {feat_x}={new_x:.1f}, {feat_y}={new_y:.1f}")  # Debug
+    def update_nd_position(self, widget, x, y, feature_x=None, feature_y=None):
+        """Update widget position in nD space for specific features"""
+        if feature_x is not None and feature_y is not None:
+            # Update the specified features
+            widget.nd_coords[feature_x] = x
+            widget.nd_coords[feature_y] = y
+            print(f"   Updated nd_coords: {feature_x}={x:.1f}, {feature_y}={y:.1f}")
+        else:
+            # Legacy fallback - update all features
+            for feature in self.feature_names:
+                if feature not in widget.nd_coords:
+                    widget.nd_coords[feature] = 128
 
     def debug_widgets(self):
         print(f"\n🔍 Current widgets in nd_manager ({len(self.widgets)}):")

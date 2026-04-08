@@ -78,12 +78,10 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             tf_type='2d',
             data=norm_data_x,
             gradient_data=norm_data_y,
-            x_label=self.feat_x,      # Add this
-            y_label=self.feat_y       # Add this
+            x_label=self.feat_x,
+            y_label=self.feat_y
         )
 
-        # Set the axis labels for the canvas
-        
         self.tf_canvas.raw_intensity_range = self.x_range
         self.tf_canvas.raw_gradient_range = self.y_range
         self.tf_canvas.intensity_range = (0, 255)
@@ -92,44 +90,67 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.tf_canvas.set_projection_features(self.feat_x, self.feat_y)
         self.tf_canvas.set_nd_callback(self.on_widget_moved)
 
-
         canvas_wrapper = TFCanvasWidget(self.tf_canvas, self, label='Reset View')
         left_layout.addWidget(canvas_wrapper)
 
         main_layout.addWidget(left_widget, 2)
 
-        # MIDDLE: Widget Manager
+        # MIDDLE: Simple Widget Controls (not the full WidgetManager)
         middle_widget = QtWidgets.QWidget()
         middle_layout = QtWidgets.QVBoxLayout(middle_widget)
 
-        manager_title = QtWidgets.QLabel("<h3>Widget Manager</h3>")
-        manager_title.setAlignment(Qt.AlignCenter)
-        middle_layout.addWidget(manager_title)
+        controls_title = QtWidgets.QLabel("<h3>Widget Controls</h3>")
+        controls_title.setAlignment(Qt.AlignCenter)
+        middle_layout.addWidget(controls_title)
 
-        self.widget_manager = WidgetManager(self.tf_canvas)
-        middle_layout.addWidget(self.widget_manager)
+        # Simple list of widgets
+        self.widget_list = QtWidgets.QListWidget()
+        self.widget_list.itemSelectionChanged.connect(self.on_widget_selected)
+        middle_layout.addWidget(self.widget_list)
 
+        # Button layout
+        button_layout = QtWidgets.QHBoxLayout()
+    
+        add_btn = QtWidgets.QPushButton("➕ Add Widget")
+        add_btn.clicked.connect(self.add_widget)
+        button_layout.addWidget(add_btn)
+    
+        delete_btn = QtWidgets.QPushButton("❌ Delete Selected")
+        delete_btn.clicked.connect(self.delete_selected_widget)
+        button_layout.addWidget(delete_btn)
+    
+        clear_btn = QtWidgets.QPushButton("🗑 Clear All")
+        clear_btn.clicked.connect(self.clear_all_widgets)
+        button_layout.addWidget(clear_btn)
+    
+        middle_layout.addLayout(button_layout)
+
+        # Parameter controls (simple version)
+        self.param_group = QtWidgets.QGroupBox("Widget Parameters")
+        self.param_layout = QtWidgets.QFormLayout()
+        self.param_group.setLayout(self.param_layout)
+        self.param_group.setVisible(False)
+        middle_layout.addWidget(self.param_group)
+
+        # Sync buttons
+        sync_layout = QtWidgets.QHBoxLayout()
+        sync_to_nd_btn = QtWidgets.QPushButton("🔄 Sync to 3D")
+        sync_to_nd_btn.clicked.connect(self.sync_to_nd)
+        sync_layout.addWidget(sync_to_nd_btn)
+    
+        load_from_nd_btn = QtWidgets.QPushButton("📥 Load from 3D")
+        load_from_nd_btn.clicked.connect(self.load_from_nd)
+        sync_layout.addWidget(load_from_nd_btn)
+    
+        middle_layout.addLayout(sync_layout)
+
+        # Test buttons
+        middle_layout.addStretch()
         close_btn = QtWidgets.QPushButton("Close")
         close_btn.clicked.connect(self.close)
         middle_layout.addWidget(close_btn)
 
-        intensity_only_btn = QtWidgets.QPushButton("Test: Intensity Only")
-        intensity_only_btn.clicked.connect(self.test_intensity_only)
-        middle_layout.addWidget(intensity_only_btn)
-        
-        # Test buttons
-        indep_btn = QtWidgets.QPushButton("Test: Red Cube")
-        indep_btn.clicked.connect(self.test_red_cube)
-        middle_layout.addWidget(indep_btn)
-
-        cube_widget_btn = QtWidgets.QPushButton("Test: Cube + Widget")
-        cube_widget_btn.clicked.connect(self.test_cube_with_widget)
-        middle_layout.addWidget(cube_widget_btn)
-
-        isolated_btn = QtWidgets.QPushButton("Test: Isolated Volume")
-        isolated_btn.clicked.connect(self.test_isolated)
-        middle_layout.addWidget(isolated_btn)
-
+        main_layout.addWidget(middle_widget, 1)
         # Force real volume red
         force_btn = QtWidgets.QPushButton("Force Real Volume Red")
         force_btn.clicked.connect(self.force_real_red)
@@ -215,20 +236,26 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.update_render_view()
     
     def on_widget_moved(self, widget_2d, feat_x, feat_y, new_x, new_y):
-        print(f"Widget moved: ({new_x:.1f}, {new_y:.1f})")
+        print(f"Widget moved: ({new_x:.1f}, {new_y:.1f}) for features ({feat_x}, {feat_y})")
     
-        # Update the nD manager with the new position
-        self.nd_manager.update_nd_position(widget_2d, new_x, new_y)
+        # Update the widget's display position (for the canvas)
+        widget_2d.center_intensity = new_x
+        widget_2d.center_gradient = new_y
     
-        # DEBUG: Print current widgets
-        self.nd_manager.debug_widgets()
+        # CRITICAL: Update BOTH features in nd_coords
+        # feat_x is the X-axis feature (Gradient in your example)
+        # feat_y is the Y-axis feature (Laplacian in your example)
+        widget_2d.nd_coords[feat_x] = new_x
+        widget_2d.nd_coords[feat_y] = new_y
     
-        # Update the widget manager UI if needed
-        if hasattr(self, 'widget_manager'):
-            self.widget_manager.update_widget_list()
+        # Also update the nd_manager (redundant but safe)
+        self.nd_manager.update_nd_position(widget_2d, new_x, new_y, feat_x, feat_y)
     
-        # Refresh the render
-        self.update_render_view()
+        # Update the widget list display
+        self.update_widget_list()
+    
+        # AUTO-SYNC to 3D renderer
+        self.sync_to_nd()
     
     def update_render_view(self):
         print(f"Updating render view for {self.feat_x} vs {self.feat_y}")
@@ -330,3 +357,265 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
     def test_intensity_only(self):
         if hasattr(self, 'mc_renderer') and self.mc_renderer:
             self.mc_renderer.force_intensity_volume()
+
+    def setup_widget_manager_sync(self):
+        """Setup widget manager with nd_manager synchronization"""
+        # Store original methods
+        original_add_widget = self.widget_manager.add_preset_widget
+        original_clear_widgets = self.widget_manager.clear_btn.clicked
+        original_duplicate_widget = self.widget_manager.duplicate_widget
+        original_delete_widget = self.widget_manager.delete_widget
+    
+        # Override with sync versions
+        self.widget_manager.add_preset_widget = self.sync_add_preset_widget
+        self.widget_manager.duplicate_widget = self.sync_duplicate_widget
+    
+        # Connect clear button to sync version
+        self.widget_manager.clear_btn.clicked.disconnect()
+        self.widget_manager.clear_btn.clicked.connect(self.sync_clear_widgets)
+    
+        # Store reference to original delete method
+        self.original_delete_widget = self.widget_manager.delete_widget
+        self.widget_manager.delete_widget = self.sync_delete_widget
+
+    def sync_add_preset_widget(self):
+        """Add widget to both canvas and nd_manager"""
+        # Get widget data from preset combo
+        widget_data = self.widget_manager.preset_combo.currentData()
+        widget_type_str, preset_name = widget_data
+    
+        from widget_factory import WidgetType, WidgetFactory
+        widget_type = WidgetType(widget_type_str)
+        new_widget = WidgetFactory.create_widget(widget_type, preset=preset_name)
+    
+        # Add to nd_manager first (master)
+        self.nd_manager.add_widget(new_widget)
+    
+        # Then add to canvas
+        self.tf_canvas.add_widget(new_widget)
+    
+        # Update widget list
+        self.widget_manager.update_widget_list()
+    
+        # Refresh render
+        self.update_render_view()
+        print(f"✅ Added preset widget and synced with nd_manager")
+
+    def sync_clear_widgets(self):
+        """Clear all widgets from both canvas and nd_manager"""
+        # Clear nd_manager
+        self.nd_manager.widgets.clear()
+    
+        # Clear canvas
+        self.tf_canvas.clear_widgets()
+    
+        # Update widget list
+        self.widget_manager.update_widget_list()
+    
+        # Refresh render
+        self.update_render_view()
+        print(f"✅ Cleared all widgets and synced with nd_manager")
+
+    def sync_duplicate_widget(self):
+        """Duplicate widget in both canvas and nd_manager"""
+        selected_items = self.widget_manager.widget_list.selectedItems()
+        if selected_items and self.widget_manager.current_widget:
+            import copy
+            new_widget = copy.copy(self.widget_manager.current_widget)
+            # Offset slightly so they don't overlap
+            new_widget.center_intensity = min(255, new_widget.center_intensity + 10)
+            new_widget.center_gradient = min(255, new_widget.center_gradient + 10)
+        
+            # Add to nd_manager
+            self.nd_manager.add_widget(new_widget)
+        
+            # Add to canvas
+            self.tf_canvas.add_widget(new_widget)
+        
+            # Update widget list
+            self.widget_manager.update_widget_list()
+        
+            # Refresh render
+            self.update_render_view()
+            print(f"✅ Duplicated widget and synced with nd_manager")
+
+    def sync_delete_widget(self, widget):
+        """Delete widget from both canvas and nd_manager"""
+        if widget in self.tf_canvas.widgets:
+            # Remove from nd_manager
+            self.nd_manager.remove_widget(widget)
+        
+            # Remove from canvas
+            self.tf_canvas.remove_widget(widget)
+        
+            # Update widget list
+            self.widget_manager.update_widget_list()
+        
+            # Hide parameters panel
+            self.widget_manager.param_group.setVisible(False)
+            self.widget_manager.current_widget = None
+        
+            # Refresh render
+            self.update_render_view()
+            print(f"✅ Deleted widget and synced with nd_manager")
+
+    def update_widget_list(self):
+        """Update the widget list display"""
+        self.widget_list.clear()
+        for i, widget in enumerate(self.tf_canvas.widgets):
+            item = QtWidgets.QListWidgetItem(f"{i+1}. {widget.widget_type.value} (X:{widget.center_intensity:.0f}, Y:{widget.center_gradient:.0f})")
+            item.setData(Qt.UserRole, i)
+            self.widget_list.addItem(item)
+
+    def on_widget_selected(self):
+        """Handle widget selection"""
+        selected = self.widget_list.selectedItems()
+        if not selected:
+            self.param_group.setVisible(False)
+            return
+    
+        idx = selected[0].data(Qt.UserRole)
+        self.current_widget = self.tf_canvas.widgets[idx]
+        self.tf_canvas.active_widget = idx
+        self.tf_canvas._draw()
+    
+        # Update parameter controls
+        self.update_parameter_controls()
+
+    def update_parameter_controls(self):
+        """Update parameter controls for selected widget"""
+        # Clear existing
+        for i in reversed(range(self.param_layout.count())):
+            self.param_layout.itemAt(i).widget().setParent(None)
+    
+        if not self.current_widget:
+            return
+    
+        # Add position controls
+        self.x_spin = QtWidgets.QDoubleSpinBox()
+        self.x_spin.setRange(0, 255)
+        self.x_spin.setValue(self.current_widget.center_intensity)
+        self.x_spin.valueChanged.connect(self.on_x_changed)
+        self.param_layout.addRow("X Position:", self.x_spin)
+    
+        self.y_spin = QtWidgets.QDoubleSpinBox()
+        self.y_spin.setRange(0, 255)
+        self.y_spin.setValue(self.current_widget.center_gradient)
+        self.y_spin.valueChanged.connect(self.on_y_changed)
+        self.param_layout.addRow("Y Position:", self.y_spin)
+    
+        # Opacity control
+        self.opacity_spin = QtWidgets.QDoubleSpinBox()
+        self.opacity_spin.setRange(0, 1)
+        self.opacity_spin.setSingleStep(0.05)
+        self.opacity_spin.setValue(self.current_widget.opacity)
+        self.opacity_spin.valueChanged.connect(self.on_opacity_changed)
+        self.param_layout.addRow("Opacity:", self.opacity_spin)
+    
+        # Color button
+        self.color_btn = QtWidgets.QPushButton("Change Color")
+        self.color_btn.clicked.connect(self.change_color)
+        self.param_layout.addRow("Color:", self.color_btn)
+        self.update_color_button()
+    
+        self.param_group.setVisible(True)
+
+    def on_x_changed(self, value):
+        if self.current_widget:
+            self.current_widget.center_intensity = value
+            self.tf_canvas._draw()
+            # AUTO-SYNC to 3D renderer
+            self.sync_to_nd()
+            self.update_render_view()
+
+    def on_y_changed(self, value):
+        if self.current_widget:
+            self.current_widget.center_gradient = value
+            self.tf_canvas._draw()
+            # AUTO-SYNC to 3D renderer
+            self.sync_to_nd()
+            self.update_render_view()
+
+    def on_opacity_changed(self, value):
+        if self.current_widget:
+            self.current_widget.opacity = value
+            self.tf_canvas._draw()
+            # AUTO-SYNC to 3D renderer
+            self.sync_to_nd()
+            self.update_render_view()
+
+    def change_color(self):
+        if self.current_widget:
+            qcolor = QtWidgets.QColorDialog.getColor()
+            if qcolor.isValid():
+                self.current_widget.color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
+                self.update_color_button()
+                self.tf_canvas._draw()
+                # AUTO-SYNC to 3D renderer
+                self.sync_to_nd()
+                self.update_render_view()
+
+    def update_color_button(self):
+        if hasattr(self, 'color_btn') and self.current_widget:
+            r, g, b = self.current_widget.color
+            self.color_btn.setStyleSheet(f"background-color: rgb({int(r*255)},{int(g*255)},{int(b*255)});")
+
+    def add_widget(self):
+        """Add a new widget"""
+        from widget_factory import WidgetFactory, WidgetType
+    
+        new_widget = WidgetFactory.create_widget(
+            WidgetType.GAUSSIAN,
+            center_intensity=128,
+            center_gradient=128,
+            intensity_std=25,
+            gradient_std=25,
+            opacity=0.8,
+            color=(0.8, 0.2, 0.2)
+        )
+    
+        # AUTO-SYNC to nd_manager and 3D renderer
+        self.nd_manager.add_widget(new_widget)
+        self.tf_canvas.add_widget(new_widget)
+        self.update_widget_list()
+        self.update_render_view()
+
+    def delete_selected_widget(self):
+        """Delete selected widget"""
+        if hasattr(self, 'current_widget') and self.current_widget:
+            self.tf_canvas.remove_widget(self.current_widget)
+            self.current_widget = None
+            self.update_widget_list()
+            self.param_group.setVisible(False)
+            # AUTO-SYNC to 3D renderer
+            self.sync_to_nd()
+            self.update_render_view()
+            
+
+    def clear_all_widgets(self):
+        """Clear all widgets"""
+        self.tf_canvas.clear_widgets()
+        self.current_widget = None
+        self.update_widget_list()
+        self.param_group.setVisible(False)
+        # AUTO-SYNC to 3D renderer
+        self.sync_to_nd()
+        self.update_render_view()
+
+    def sync_to_nd(self):
+        """Sync current widgets to nd_manager"""
+        self.nd_manager.widgets.clear()
+        for widget in self.tf_canvas.widgets:
+            self.nd_manager.add_widget(widget)
+        self.update_render_view()
+        print(f"✅ Synced {len(self.tf_canvas.widgets)} widgets to nD renderer")
+
+    def load_from_nd(self):
+        """Load widgets from nd_manager"""
+        self.tf_canvas.clear_widgets()
+        projected = self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
+        for widget in projected:
+            self.tf_canvas.add_widget(widget)
+        self.update_widget_list()
+        self.update_render_view()
+        print(f"✅ Loaded {len(projected)} widgets from nD manager")

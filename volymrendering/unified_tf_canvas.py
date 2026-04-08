@@ -163,35 +163,45 @@ class UnifiedTFCanvas(BaseTransferFunction):
     
         return self._create_vtk_samples(intensity_opacity, intensity_color)
 
+
+    
     def _sample_2d_for_vtk_dual_functions(self):
         """Create dual 1D functions for VTK (scalar + gradient opacity)"""
         scalar_influence = np.zeros(256)
         gradient_influence = np.zeros(256)  
         color_influence = np.ones((256, 3))
-    
+
         print(f"🎯 Creating 2D TF with {len(self.widgets)} widgets")
-    
+
+        # Process each widget
         for widget_idx, widget in enumerate(self.widgets):
             print(f"  Processing {widget.widget_type.value} widget...")
         
-            if hasattr(widget, 'intensity_width'):
-                intensity_min = max(0, int(widget.center_intensity - widget.intensity_width/2))
-                intensity_max = min(255, int(widget.center_intensity + widget.intensity_width/2))
-            else:
-                intensity_min = 0
-                intensity_max = 255
-            
-            if hasattr(widget, 'gradient_height'):
-                gradient_min = max(0, int(widget.center_gradient - widget.gradient_height/2))
-                gradient_max = min(255, int(widget.center_gradient + widget.gradient_height/2))
-            else:
-                gradient_min = 0
-                gradient_max = 255
+            # Get widget parameters
+            center_x = widget.center_intensity
+            center_y = widget.center_gradient
         
+            # Get sigma values
+            sigma_x = getattr(widget, 'intensity_std', 30)
+            sigma_y = getattr(widget, 'gradient_std', 30)
+        
+            # Define influence range (3 sigma)
+            intensity_min = max(0, int(center_x - 3 * sigma_x))
+            intensity_max = min(255, int(center_x + 3 * sigma_x))
+            gradient_min = max(0, int(center_y - 3 * sigma_y))
+            gradient_max = min(255, int(center_y + 3 * sigma_y))
+        
+            print(f"    Intensity: {intensity_min}-{intensity_max}, Gradient: {gradient_min}-{gradient_max}")
+        
+            # Project onto scalar axis (X-axis)
             for intensity in range(intensity_min, intensity_max + 1):
                 max_opacity = 0
-                for gradient in range(gradient_min, gradient_max + 1, 4):
-                    opacity = widget.calculate_opacity(intensity, gradient)
+                # Sample gradient axis to find max opacity for this intensity
+                for gradient in range(gradient_min, gradient_max + 1, max(1, (gradient_max - gradient_min) // 50)):
+                    dx = (intensity - center_x) / sigma_x
+                    dy = (gradient - center_y) / sigma_y
+                    dist_sq = dx*dx + dy*dy
+                    opacity = widget.opacity * np.exp(-dist_sq / 2)
                     max_opacity = max(max_opacity, opacity)
             
                 if max_opacity > 0:
@@ -201,30 +211,45 @@ class UnifiedTFCanvas(BaseTransferFunction):
                             color_influence[intensity] = widget.color
                     elif widget.blend_mode == 'add':
                         scalar_influence[intensity] += max_opacity
-                        if max_opacity > 0:
-                            weight = max_opacity / (scalar_influence[intensity] + 1e-6)
-                            color_influence[intensity] = (
-                                weight * np.array(widget.color) + 
-                                (1 - weight) * color_influence[intensity]
-                            )
-        
+                        weight = max_opacity / (scalar_influence[intensity] + 1e-6)
+                        color_influence[intensity] = (
+                            weight * np.array(widget.color) + 
+                            (1 - weight) * color_influence[intensity]
+                        )
+
+            # Project onto gradient axis (Y-axis)
             for gradient in range(gradient_min, gradient_max + 1):
                 max_opacity = 0
-                for intensity in range(intensity_min, intensity_max + 1, 4):
-                    opacity = widget.calculate_opacity(intensity, gradient)
+                # Sample intensity axis to find max opacity for this gradient
+                for intensity in range(intensity_min, intensity_max + 1, max(1, (intensity_max - intensity_min) // 50)):
+                    dx = (intensity - center_x) / sigma_x
+                    dy = (gradient - center_y) / sigma_y
+                    dist_sq = dx*dx + dy*dy
+                    opacity = widget.opacity * np.exp(-dist_sq / 2)
                     max_opacity = max(max_opacity, opacity)
             
                 if max_opacity > 0:
                     if widget.blend_mode == 'max':
-                        gradient_influence[gradient] = max(
-                            gradient_influence[gradient], max_opacity
-                        )
+                        gradient_influence[gradient] = max(gradient_influence[gradient], max_opacity)
                     elif widget.blend_mode == 'add':
                         gradient_influence[gradient] += max_opacity
-    
+
+        # Clamp values
         scalar_influence = np.clip(scalar_influence, 0, 1)
         gradient_influence = np.clip(gradient_influence, 0, 1)
-    
+
+        # Debug output
+        print(f"\n📊 Canvas Results:")
+        print(f"   Scalar influence - max: {scalar_influence.max():.3f} at intensity {np.argmax(scalar_influence)}")
+        print(f"   Non-zero scalar points: {np.sum(scalar_influence > 0.01)}/256")
+        print(f"   Gradient influence - max: {gradient_influence.max():.3f}")
+        print(f"   Non-zero gradient points: {np.sum(gradient_influence > 0.01)}/256")
+
+        # Print values at key intensities
+        for intensity in [30, 90, 120, 195]:
+            if intensity < 256:
+                print(f"   Intensity {intensity}: opacity={scalar_influence[intensity]:.3f}, color={color_influence[intensity]}")
+
         return self._create_dual_function_samples(scalar_influence, gradient_influence, color_influence)
 
     def _create_dual_function_samples(self, scalar_opacity, gradient_opacity, colors):

@@ -184,54 +184,74 @@ class TransferFunctionPlot(BaseTransferFunction):
     # ===== 1D-SPECIFIC EVENT HANDLING =====
     
     def on_press(self, event):
-        """Handle mouse press events."""
+        """Handle mouse press events for 1D TF with shift+click color picker."""
         if event.inaxes != self.ax:
             return
 
         # Find closest point
         idx = self._closest_point(event)
 
-        # Double-click: add point
+        # Check for shift+click for color picking (using guiEvent modifiers)
+        try:
+            mods = event.guiEvent.modifiers()
+            shift_pressed = (mods & Qt.ShiftModifier)
+        except:
+            shift_pressed = False
+    
+        # SHIFT+CLICK on any point - change its color
+        if shift_pressed and idx is not None:
+            # Open color dialog
+            from PyQt5 import QtWidgets
+            qcolor = QtWidgets.QColorDialog.getColor()
+            if qcolor.isValid():
+                new_color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
+                self.update_point_color(idx, new_color)
+                self._draw()
+                self._notify_app()
+            return
+
+        # Double-click: add point (without shift)
         if getattr(event, 'dblclick', False):
             if event.xdata is None or event.ydata is None:
                 return
-                
+            
             x_clipped = float(np.clip(event.xdata, 0.0, 255.0))
             y_clipped = float(np.clip(event.ydata, 0.0, 1.0))
-            
+        
+            # Default white color for new points
             color = (1.0, 1.0, 1.0)
-            try:
-                mods = event.guiEvent.modifiers()
-                if mods & Qt.ShiftModifier:
-                    qcolor = QtWidgets.QColorDialog.getColor()
-                    if qcolor.isValid():
-                        color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
-            except:
-                pass
-                
+        
+            # If shift is also pressed during double-click, open color picker for new point
+            if shift_pressed:
+                from PyQt5 import QtWidgets
+                qcolor = QtWidgets.QColorDialog.getColor()
+                if qcolor.isValid():
+                    color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
+        
             self.add_point(x_clipped, y_clipped, color)
+            self._draw()
+            self._notify_app()
             return
 
         # Right-click: delete point (but not endpoints)
         if idx is not None and getattr(event, 'button', None) == 3:
             if idx not in (0, len(self.points_x)-1):
                 self.remove_point(idx)
+                self._draw()
+                self._notify_app()
             return
 
-        # Left-click: select point for dragging or change color
+        # Left-click: select point for dragging (without shift)
         if idx is not None and getattr(event, 'button', None) == 1:
-            try:
-                mods = event.guiEvent.modifiers()
-                if mods & Qt.ShiftModifier:
-                    qcolor = QtWidgets.QColorDialog.getColor()
-                    if qcolor.isValid():
-                        self.update_point_color(idx, (qcolor.redF(), qcolor.greenF(), qcolor.blueF()))
-                else:
-                    self.selected_index = idx
-                    self.dragging = True
-            except:
-                self.selected_index = idx
-                self.dragging = True
+            self.selected_index = idx
+            self.dragging = True
+            self._draw()
+            return
+    
+        # Click on empty space - deselect
+        self.selected_index = None
+        self.dragging = False
+        self._draw()
 
     def on_motion(self, event):
         """Handle mouse motion for point dragging."""
@@ -260,3 +280,29 @@ class TransferFunctionPlot(BaseTransferFunction):
         """Notify app about TF changes."""
         if self.update_callback:
             self.update_callback(self.points_x, self.points_y, self.colors)
+
+    def _closest_point(self, event):
+        """Find closest point to mouse click."""
+        if not self.points_x:
+            return None
+        
+        min_dist = 10  # 10 pixels threshold
+        closest_idx = None
+    
+        for i, (x, y) in enumerate(zip(self.points_x, self.points_y)):
+            # Convert to display coordinates for distance check
+            x_disp, y_disp = self._get_display_coords(x, y)
+            dist = np.sqrt((event.xdata - x_disp)**2 + (event.ydata - y_disp)**2)
+        
+            if dist < min_dist:
+                min_dist = dist
+                closest_idx = i
+    
+        return closest_idx
+
+    def update_point_color(self, idx, new_color):
+        """Update color of a specific point."""
+        if 0 <= idx < len(self.colors):
+            self.colors[idx] = new_color
+            self._draw()
+            self._notify_app()

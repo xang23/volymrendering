@@ -203,7 +203,7 @@ class NDShaderRenderer:
         return tf_texture
 
     def set_feature_pair(self, x_feature, y_feature):
-        """Use EXACT same logic as UnifiedTFCanvas._sample_2d_for_vtk_dual_functions()"""
+        """Use EXACT same logic as UnifiedTFCanvas - let VTK apply transfer functions"""
         try:
             print(f"\n🎯 Setting feature pair: {x_feature} vs {y_feature}")
 
@@ -213,96 +213,89 @@ class NDShaderRenderer:
             if y_feature not in self.feature_to_volume:
                 print(f"❌ Error: {y_feature} not found")
                 return
-        
+
             self.current_x_feature = x_feature
             self.current_y_feature = y_feature
-        
+
             # Get volume indices for both features
             x_vol, x_comp = self.feature_to_volume[x_feature]
             y_vol, y_comp = self.feature_to_volume[y_feature]
-        
-            # ===== GET FRESH WIDGET PROJECTION =====
-            # This should get the CURRENT state, not accumulate
+
+            # Get widgets
             widgets = self.nd_manager.project_to_2d(x_feature, y_feature)
             print(f"   Found {len(widgets)} widgets")
-        
+
             if len(widgets) == 0:
                 from tf_widgets import GaussianWidget
                 default_widget = GaussianWidget()
                 default_widget.center_intensity = 128
                 default_widget.center_gradient = 128
                 default_widget.opacity = 0.8
-                default_widget.color = (1.0, 0.0, 0.0)
+                default_widget.color = (0.8, 0.2, 0.2)
                 widgets = [default_widget]
-        
-            # Extract X feature data
+
+            # Extract X feature data (RAW values - these go into the volume)
             original_volume = self.volumes[x_vol]
             original_data = original_volume.GetMapper().GetInput()
             dims = original_data.GetDimensions()
             n_voxels = dims[0] * dims[1] * dims[2]
-        
+
             scalars = original_data.GetPointData().GetScalars()
             data = numpy_support.vtk_to_numpy(scalars)
-        
+
             if len(data.shape) == 2:
-                x_data = data[:, x_comp]
+                x_data_raw = data[:, x_comp]
             else:
-                x_data = data
-        
-            print(f"   Extracted {x_feature}: min={x_data.min():.3f}, max={x_data.max():.3f}")
-        
-            # Extract Y feature data
+                x_data_raw = data
+
+            # Extract Y feature data (for gradient opacity function)
             if y_vol == x_vol and y_comp == x_comp:
-                y_data = x_data
+                y_data_raw = x_data_raw
             else:
                 y_original_volume = self.volumes[y_vol]
                 y_original_data = y_original_volume.GetMapper().GetInput()
                 y_scalars = y_original_data.GetPointData().GetScalars()
                 y_data_all = numpy_support.vtk_to_numpy(y_scalars)
                 if len(y_data_all.shape) == 2:
-                    y_data = y_data_all[:, y_comp]
+                    y_data_raw = y_data_all[:, y_comp]
                 else:
-                    y_data = y_data_all
+                    y_data_raw = y_data_all
+
+            # Get actual min/max for normalization
+            x_min, x_max = x_data_raw.min(), x_data_raw.max()
+            y_min, y_max = y_data_raw.min(), y_data_raw.max()
         
-            print(f"   Extracted {y_feature}: min={y_data.min():.3f}, max={y_data.max():.3f}")
-        
-            # Convert to display space (0-255)
-            x_display = x_data * 255.0
-            y_display = y_data * 255.0
-        
-            # ===== RESET TRANSFER FUNCTIONS =====
-            # IMPORTANT: Start fresh each time!
+            print(f"   X ({x_feature}) raw range: {x_min:.3f} - {x_max:.3f}")
+            print(f"   Y ({y_feature}) raw range: {y_min:.3f} - {y_max:.3f}")
+
+            # Normalize to display space (0-255) for transfer function lookup
+            x_display = 255.0 * (x_data_raw - x_min) / (x_max - x_min)
+
+            # Reset transfer functions
             scalar_opacity = np.zeros(256, dtype=np.float32)
             gradient_opacity = np.zeros(256, dtype=np.float32)
-            color_for_intensity = np.ones((256, 3), dtype=np.float32) * 0.5  # Default gray
-        
+            color_for_intensity = np.ones((256, 3), dtype=np.float32) * 0.5
+
             print(f"\n   🔄 Building transfer functions using canvas logic...")
-        
+
             # For each widget, project onto scalar and gradient axes
-            for widget in widgets:
-                # Get widget parameters
+            for widget_idx, widget in enumerate(widgets):
                 center_x = widget.center_intensity
                 center_y = widget.center_gradient
-            
-                # Get widget size
-                if hasattr(widget, 'intensity_std'):
-                    sigma_x = widget.intensity_std
-                    sigma_y = widget.gradient_std
-                else:
-                    sigma_x = 30
-                    sigma_y = 30
-            
-                # Define influence range
+
+                sigma_x = getattr(widget, 'intensity_std', 30)
+                sigma_y = getattr(widget, 'gradient_std', 30)
+
                 intensity_min = max(0, int(center_x - 3 * sigma_x))
                 intensity_max = min(255, int(center_x + 3 * sigma_x))
                 gradient_min = max(0, int(center_y - 3 * sigma_y))
                 gradient_max = min(255, int(center_y + 3 * sigma_y))
-            
-                print(f"   Widget: center=({center_x:.1f},{center_y:.1f}), sigma=({sigma_x:.1f},{sigma_y:.1f})")
+
+                print(f"   Widget {widget_idx}: center=({center_x:.1f},{center_y:.1f}), sigma=({sigma_x:.1f},{sigma_y:.1f})")
                 print(f"      Intensity range: {intensity_min}-{intensity_max}")
                 print(f"      Gradient range: {gradient_min}-{gradient_max}")
-            
-                # Project onto scalar axis
+
+                # Project onto scalar axis (X-axis) - determines opacity for each intensity
                 for intensity in range(intensity_min, intensity_max + 1):
                     max_opacity = 0
                     for gradient in range(gradient_min, gradient_max + 1, 4):
@@ -311,13 +304,12 @@ class NDShaderRenderer:
                         dist_sq = dx*dx + dy*dy
                         opacity = widget.opacity * np.exp(-dist_sq / 2)
                         max_opacity = max(max_opacity, opacity)
-                
-                    # Max blending - OVERWRITE if greater (not accumulate)
+            
                     if max_opacity > scalar_opacity[intensity]:
                         scalar_opacity[intensity] = max_opacity
                         color_for_intensity[intensity] = widget.color
-            
-                # Project onto gradient axis
+
+                # Project onto gradient axis (Y-axis) - determines edge enhancement
                 for gradient in range(gradient_min, gradient_max + 1):
                     max_opacity = 0
                     for intensity in range(intensity_min, intensity_max + 1, 4):
@@ -326,119 +318,107 @@ class NDShaderRenderer:
                         dist_sq = dx*dx + dy*dy
                         opacity = widget.opacity * np.exp(-dist_sq / 2)
                         max_opacity = max(max_opacity, opacity)
-                
+            
                     if max_opacity > gradient_opacity[gradient]:
                         gradient_opacity[gradient] = max_opacity
-        
-            # Clamp to 0-1 range
+
             scalar_opacity = np.clip(scalar_opacity, 0, 1)
             gradient_opacity = np.clip(gradient_opacity, 0, 1)
-        
+
             print(f"\n   Scalar opacity range: {scalar_opacity.min():.3f} - {scalar_opacity.max():.3f}")
             print(f"   Non-zero scalar points: {np.sum(scalar_opacity > 0.01)} / 256")
+            print(f"   Gradient opacity range: {gradient_opacity.min():.3f} - {gradient_opacity.max():.3f}")
         
-            # ===== SAMPLE VOLUME WITH FRESH OPACITY VALUES =====
-            print(f"\n   🔄 Sampling volume with pre-computed transfer functions...")
-        
-            # Create fresh opacity array
-            opacity_data = np.zeros(n_voxels, dtype=np.float32)
-        
-            # Process in chunks
-            chunk_size = 1000000
-            for start_idx in range(0, n_voxels, chunk_size):
-                end_idx = min(start_idx + chunk_size, n_voxels)
-                chunk_x = x_display[start_idx:end_idx].astype(np.int32)
-                chunk_x = np.clip(chunk_x, 0, 255)
-            
-                # Look up opacity from scalar_opacity array (FRESH each time)
-                chunk_opacity = scalar_opacity[chunk_x]
-                opacity_data[start_idx:end_idx] = chunk_opacity
-            
-                if (start_idx // chunk_size) % 10 == 0:
-                    print(f"      Processed {end_idx}/{n_voxels} voxels")
-        
-            print(f"   ✅ Sampling complete")
-            print(f"   Opacity range: {opacity_data.min():.3f} - {opacity_data.max():.3f}")
-            non_zero = np.sum(opacity_data > 0.01)
-            print(f"   Non-zero opacity: {non_zero} / {n_voxels} voxels ({100*non_zero/n_voxels:.2f}%)")
-        
-            # ===== CREATE NEW VOLUME (REPLACE OLD ONE) =====
+            peak_idx = np.argmax(scalar_opacity)
+            print(f"   Peak scalar opacity at intensity {peak_idx} with value {scalar_opacity[peak_idx]:.3f}")
+
+            # ===== KEY CHANGE: Store RAW intensity values, not pre-computed opacity =====
+            # Create volume with raw intensity values (0-1 range)
             final_volume = vtk.vtkImageData()
             final_volume.SetDimensions(dims)
             final_volume.AllocateScalars(vtk.VTK_FLOAT, 1)
-            vtk_opacity = numpy_support.numpy_to_vtk(opacity_data.astype(np.float32))
-            final_volume.GetPointData().SetScalars(vtk_opacity)
         
-            # Create color function (fresh each time)
+            # Store normalized intensity values (0-1 range) in the volume
+            # VTK will apply the transfer functions during rendering
+            intensity_normalized = (x_data_raw - x_min) / (x_max - x_min)
+            vtk_scalars = numpy_support.numpy_to_vtk(intensity_normalized.astype(np.float32))
+            final_volume.GetPointData().SetScalars(vtk_scalars)
+
+            # Create color transfer function (maps intensity to color)
             color_func = vtk.vtkColorTransferFunction()
-            opacity_func = vtk.vtkPiecewiseFunction()
-        
-            # Add points for each intensity where opacity > 0
             for intensity in range(256):
                 if scalar_opacity[intensity] > 0.01:
                     r, g, b = color_for_intensity[intensity]
-                    color_func.AddRGBPoint(intensity / 255.0, r, g, b)
-                    opacity_func.AddPoint(intensity / 255.0, scalar_opacity[intensity])
+                    # Map from normalized intensity (0-1) to color
+                    norm_intensity = intensity / 255.0
+                    color_func.AddRGBPoint(norm_intensity, r, g, b)
+        
+            # Add default endpoints if needed
+            if color_func.GetSize() == 0:
+                color_func.AddRGBPoint(0.0, 0.5, 0.5, 0.5)
+                color_func.AddRGBPoint(1.0, 0.5, 0.5, 0.5)
+
+            # Create scalar opacity function (maps intensity to opacity)
+            scalar_opacity_func = vtk.vtkPiecewiseFunction()
+            for intensity in range(256):
+                if scalar_opacity[intensity] > 0.01:
+                    norm_intensity = intensity / 255.0
+                    scalar_opacity_func.AddPoint(norm_intensity, scalar_opacity[intensity])
         
             # Add endpoints
-            color_func.AddRGBPoint(0.0, 0.3, 0.3, 0.3)
-            color_func.AddRGBPoint(1.0, 0.5, 0.5, 0.5)
-            opacity_func.AddPoint(0.0, 0.0)
-            opacity_func.AddPoint(1.0, 0.8)
-        
-            # Create gradient opacity function
+            if scalar_opacity_func.GetSize() == 0:
+                scalar_opacity_func.AddPoint(0.0, 0.0)
+                scalar_opacity_func.AddPoint(1.0, 0.0)
+
+            # Create gradient opacity function (maps gradient magnitude to opacity)
+            # For gradient, we need to use the actual gradient values from y_data_raw
             grad_opacity_func = vtk.vtkPiecewiseFunction()
-            for gradient in range(256):
-                if gradient_opacity[gradient] > 0.01:
-                    grad_opacity_func.AddPoint(gradient / 255.0, gradient_opacity[gradient])
         
-            # Create property and volume
+            # Normalize gradient values to 0-1 range
+            y_normalized = (y_data_raw - y_min) / (y_max - y_min) if y_max > y_min else y_data_raw
+        
+            # Map gradient_opacity from display space (0-255) to normalized space (0-1)
+            for gradient_display in range(256):
+                if gradient_opacity[gradient_display] > 0.01:
+                    gradient_norm = gradient_display / 255.0
+                    # Scale down gradient opacity to avoid overwhelming (0.3 factor)
+                    grad_opacity_func.AddPoint(gradient_norm, gradient_opacity[gradient_display] * 0.3)
+
+            # Create property with BOTH functions (like the canvas)
             final_prop = vtk.vtkVolumeProperty()
             final_prop.SetColor(color_func)
-            final_prop.SetScalarOpacity(opacity_func)
+            final_prop.SetScalarOpacity(scalar_opacity_func)
             final_prop.SetGradientOpacity(grad_opacity_func)
             final_prop.ShadeOn()
             final_prop.SetInterpolationTypeToLinear()
         
+            # Set shading parameters for better visual quality
+            final_prop.SetAmbient(0.2)
+            final_prop.SetDiffuse(0.7)
+            final_prop.SetSpecular(0.1)
+
+            # Create mapper
             final_mapper = vtk.vtkGPUVolumeRayCastMapper()
             final_mapper.SetInputData(final_volume)
-        
+
             final_volume_obj = vtk.vtkVolume()
             final_volume_obj.SetMapper(final_mapper)
             final_volume_obj.SetProperty(final_prop)
-        
-            # ===== REPLACE VOLUME (not accumulate!) =====
-            # Remove all existing volumes
-            for volume in list(self.renderer.GetVolumes()):  # Use list to avoid modification during iteration
+
+            # Replace volumes
+            for volume in list(self.renderer.GetVolumes()):
                 self.renderer.RemoveVolume(volume)
-        
-            # Add only the new volume
             self.renderer.AddVolume(final_volume_obj)
-        
+
             self.current_volume = final_volume_obj
-        
-            # Set camera if needed
-            bounds = final_volume.GetBounds()
-            center = [(bounds[0] + bounds[1])/2, (bounds[2] + bounds[3])/2, (bounds[4] + bounds[5])/2]
-            distance = max(bounds[1]-bounds[0], bounds[3]-bounds[2], bounds[5]-bounds[4]) * 1.5
-        
-            camera = self.renderer.GetActiveCamera()
-            camera.SetPosition(center[0] + distance, center[1] + distance * 0.8, center[2] + distance)
-            camera.SetFocalPoint(center[0], center[1], center[2])
-            camera.SetViewUp(0, 0, 1)
-            self.renderer.ResetCameraClippingRange()
-        
+
+            
+
             self.renderer.Render()
-            print(f"   ✅ Applied fresh transfer function (replaced old volume)")
-        
-            # Cleanup
-            del x_data
-            del y_data
-            del opacity_data
-        
+            print(f"   ✅ Render complete")
+
         except Exception as e:
             print(f"   ❌ Error: {e}")
-            import traceback
             traceback.print_exc()
 
     def force_volume_visible(self):
@@ -852,3 +832,27 @@ class NDShaderRenderer:
             self.set_feature_pair(self.current_x_feature, self.current_y_feature)
         else:
             print(f"   ⚠️ No current feature pair stored, can't update")
+
+    def debug_data_ranges(self, x_feature, y_feature, x_data, y_data, widgets):
+        """Debug data ranges and widget positions"""
+        print(f"\n🔍 DATA RANGE DEBUG:")
+        print(f"   X feature '{x_feature}':")
+        print(f"      Raw min: {x_data.min():.6f}")
+        print(f"      Raw max: {x_data.max():.6f}")
+        print(f"      Raw mean: {x_data.mean():.6f}")
+        print(f"      Raw std: {x_data.std():.6f}")
+    
+        print(f"   Y feature '{y_feature}':")
+        print(f"      Raw min: {y_data.min():.6f}")
+        print(f"      Raw max: {y_data.max():.6f}")
+        print(f"      Raw mean: {y_data.mean():.6f}")
+        print(f"      Raw std: {y_data.std():.6f}")
+    
+        print(f"\n   Widget positions (display space 0-255):")
+        for i, w in enumerate(widgets):
+            print(f"      Widget {i}: X={w.center_intensity:.1f}, Y={w.center_gradient:.1f}")
+        
+            # Estimate what raw values these correspond to
+            x_raw = x_data.min() + (w.center_intensity / 255.0) * (x_data.max() - x_data.min())
+            y_raw = y_data.min() + (w.center_gradient / 255.0) * (y_data.max() - y_data.min())
+            print(f"         Approx raw: X={x_raw:.3f}, Y={y_raw:.3f}")
