@@ -11,6 +11,11 @@ class NDShaderRenderer:
             self.current_x_feature = None
             self.current_y_feature = None
 
+            # ===== LÄGG TILL DESSA RADER FÖR DISPLAY KONTROLL =====
+            self.display_boost = 1.0      # Opacity boost
+            self.display_gamma = 1.0      # Gamma correction
+            # ====================================================
+
             print(f"\n🔧 Initializing NDShaderRenderer: {renderer_id}")
             print(f"   Features: {feature_names}")
 
@@ -264,7 +269,7 @@ class NDShaderRenderer:
             # Get actual min/max for normalization
             x_min, x_max = x_data_raw.min(), x_data_raw.max()
             y_min, y_max = y_data_raw.min(), y_data_raw.max()
-        
+    
             print(f"   X ({x_feature}) raw range: {x_min:.3f} - {x_max:.3f}")
             print(f"   Y ({y_feature}) raw range: {y_min:.3f} - {y_max:.3f}")
 
@@ -283,27 +288,59 @@ class NDShaderRenderer:
                 center_x = widget.center_intensity
                 center_y = widget.center_gradient
 
-                sigma_x = getattr(widget, 'intensity_std', 30)
-                sigma_y = getattr(widget, 'gradient_std', 30)
+                # ===== BESTÄM INFLUENCE RANGE BASERAT PÅ WIDGET-TYP =====
+                # Olika widgets har olika attribut för att bestämma storlek
+                if hasattr(widget, 'intensity_std'):
+                    # Gaussian
+                    sigma_x = widget.intensity_std
+                    sigma_y = widget.gradient_std
+                    radius_x = int(3 * sigma_x)
+                    radius_y = int(3 * sigma_y)
+                    print(f"   Widget {widget_idx}: GAUSSIAN (sigma={sigma_x},{sigma_y})")
+                elif hasattr(widget, 'intensity_width'):
+                    # Rectangular, Triangular, Diamond
+                    radius_x = int(widget.intensity_width)
+                    radius_y = int(widget.gradient_height)
+                    sigma_x = radius_x / 3
+                    sigma_y = radius_y / 3
+                    shape_type = getattr(widget, 'widget_type', None)
+                    shape_name = shape_type.value if shape_type else 'unknown'
+                    print(f"   Widget {widget_idx}: {shape_name.upper()} (width={radius_x},height={radius_y})")
+                elif hasattr(widget, 'intensity_radius'):
+                    # Ellipsoid
+                    radius_x = int(widget.intensity_radius)
+                    radius_y = int(widget.gradient_radius)
+                    sigma_x = radius_x / 2
+                    sigma_y = radius_y / 2
+                    print(f"   Widget {widget_idx}: ELLIPSOID (radius={radius_x},{radius_y})")
+                else:
+                    # Default fallback
+                    radius_x = 90
+                    radius_y = 90
+                    sigma_x = 30
+                    sigma_y = 30
+                    print(f"   Widget {widget_idx}: UNKNOWN (using defaults)")
 
-                intensity_min = max(0, int(center_x - 3 * sigma_x))
-                intensity_max = min(255, int(center_x + 3 * sigma_x))
-                gradient_min = max(0, int(center_y - 3 * sigma_y))
-                gradient_max = min(255, int(center_y + 3 * sigma_y))
+                intensity_min = max(0, int(center_x - radius_x))
+                intensity_max = min(255, int(center_x + radius_x))
+                gradient_min = max(0, int(center_y - radius_y))
+                gradient_max = min(255, int(center_y + radius_y))
 
-                print(f"   Widget {widget_idx}: center=({center_x:.1f},{center_y:.1f}), sigma=({sigma_x:.1f},{sigma_y:.1f})")
+                print(f"      Center: ({center_x:.1f},{center_y:.1f})")
                 print(f"      Intensity range: {intensity_min}-{intensity_max}")
                 print(f"      Gradient range: {gradient_min}-{gradient_max}")
 
+                # ===== ANVÄND WIDGETENS EGEN calculate_opacity METOD =====
                 # Project onto scalar axis (X-axis) - determines opacity for each intensity
                 for intensity in range(intensity_min, intensity_max + 1):
                     max_opacity = 0
-                    for gradient in range(gradient_min, gradient_max + 1, 4):
-                        dx = (intensity - center_x) / sigma_x
-                        dy = (gradient - center_y) / sigma_y
-                        dist_sq = dx*dx + dy*dy
-                        opacity = widget.opacity * np.exp(-dist_sq / 2)
-                        max_opacity = max(max_opacity, opacity)
+                    # Sampla gradient axis (var 4:e eller varje om intervallet är litet)
+                    step = max(1, (gradient_max - gradient_min) // 50)
+                    for gradient in range(gradient_min, gradient_max + 1, step):
+                        # KRITISKT: Använd widgetens egen calculate_opacity!
+                        opacity = widget.calculate_opacity(intensity, gradient)
+                        if opacity > max_opacity:
+                            max_opacity = opacity
             
                     if max_opacity > scalar_opacity[intensity]:
                         scalar_opacity[intensity] = max_opacity
@@ -312,12 +349,12 @@ class NDShaderRenderer:
                 # Project onto gradient axis (Y-axis) - determines edge enhancement
                 for gradient in range(gradient_min, gradient_max + 1):
                     max_opacity = 0
-                    for intensity in range(intensity_min, intensity_max + 1, 4):
-                        dx = (intensity - center_x) / sigma_x
-                        dy = (gradient - center_y) / sigma_y
-                        dist_sq = dx*dx + dy*dy
-                        opacity = widget.opacity * np.exp(-dist_sq / 2)
-                        max_opacity = max(max_opacity, opacity)
+                    step = max(1, (intensity_max - intensity_min) // 50)
+                    for intensity in range(intensity_min, intensity_max + 1, step):
+                        # KRITISKT: Använd widgetens egen calculate_opacity!
+                        opacity = widget.calculate_opacity(intensity, gradient)
+                        if opacity > max_opacity:
+                            max_opacity = opacity
             
                     if max_opacity > gradient_opacity[gradient]:
                         gradient_opacity[gradient] = max_opacity
@@ -325,79 +362,75 @@ class NDShaderRenderer:
             scalar_opacity = np.clip(scalar_opacity, 0, 1)
             gradient_opacity = np.clip(gradient_opacity, 0, 1)
 
+            if hasattr(self, 'display_boost') and self.display_boost != 1.0:
+                scalar_opacity = np.clip(scalar_opacity * self.display_boost, 0, 1)
+                gradient_opacity = np.clip(gradient_opacity * self.display_boost, 0, 1)
+
+            if hasattr(self, 'display_gamma') and self.display_gamma != 1.0:
+                scalar_opacity = np.power(scalar_opacity, 1.0/self.display_gamma)
+                gradient_opacity = np.power(gradient_opacity, 1.0/self.display_gamma)
+
             print(f"\n   Scalar opacity range: {scalar_opacity.min():.3f} - {scalar_opacity.max():.3f}")
             print(f"   Non-zero scalar points: {np.sum(scalar_opacity > 0.01)} / 256")
             print(f"   Gradient opacity range: {gradient_opacity.min():.3f} - {gradient_opacity.max():.3f}")
-        
+    
             peak_idx = np.argmax(scalar_opacity)
             print(f"   Peak scalar opacity at intensity {peak_idx} with value {scalar_opacity[peak_idx]:.3f}")
 
-            # ===== KEY CHANGE: Store RAW intensity values, not pre-computed opacity =====
-            # Create volume with raw intensity values (0-1 range)
+            # ===== CREATE VOLUME WITH RAW INTENSITY VALUES =====
             final_volume = vtk.vtkImageData()
             final_volume.SetDimensions(dims)
             final_volume.AllocateScalars(vtk.VTK_FLOAT, 1)
-        
+    
             # Store normalized intensity values (0-1 range) in the volume
-            # VTK will apply the transfer functions during rendering
             intensity_normalized = (x_data_raw - x_min) / (x_max - x_min)
             vtk_scalars = numpy_support.numpy_to_vtk(intensity_normalized.astype(np.float32))
             final_volume.GetPointData().SetScalars(vtk_scalars)
 
-            # Create color transfer function (maps intensity to color)
+            # ===== CREATE COLOR TRANSFER FUNCTION =====
             color_func = vtk.vtkColorTransferFunction()
             for intensity in range(256):
                 if scalar_opacity[intensity] > 0.01:
                     r, g, b = color_for_intensity[intensity]
-                    # Map from normalized intensity (0-1) to color
                     norm_intensity = intensity / 255.0
                     color_func.AddRGBPoint(norm_intensity, r, g, b)
-        
-            # Add default endpoints if needed
+    
             if color_func.GetSize() == 0:
                 color_func.AddRGBPoint(0.0, 0.5, 0.5, 0.5)
                 color_func.AddRGBPoint(1.0, 0.5, 0.5, 0.5)
 
-            # Create scalar opacity function (maps intensity to opacity)
+            # ===== CREATE SCALAR OPACITY FUNCTION =====
             scalar_opacity_func = vtk.vtkPiecewiseFunction()
             for intensity in range(256):
                 if scalar_opacity[intensity] > 0.01:
                     norm_intensity = intensity / 255.0
                     scalar_opacity_func.AddPoint(norm_intensity, scalar_opacity[intensity])
-        
-            # Add endpoints
+    
             if scalar_opacity_func.GetSize() == 0:
                 scalar_opacity_func.AddPoint(0.0, 0.0)
                 scalar_opacity_func.AddPoint(1.0, 0.0)
 
-            # Create gradient opacity function (maps gradient magnitude to opacity)
-            # For gradient, we need to use the actual gradient values from y_data_raw
+            # ===== CREATE GRADIENT OPACITY FUNCTION =====
             grad_opacity_func = vtk.vtkPiecewiseFunction()
-        
-            # Normalize gradient values to 0-1 range
             y_normalized = (y_data_raw - y_min) / (y_max - y_min) if y_max > y_min else y_data_raw
-        
-            # Map gradient_opacity from display space (0-255) to normalized space (0-1)
+    
             for gradient_display in range(256):
                 if gradient_opacity[gradient_display] > 0.01:
                     gradient_norm = gradient_display / 255.0
-                    # Scale down gradient opacity to avoid overwhelming (0.3 factor)
                     grad_opacity_func.AddPoint(gradient_norm, gradient_opacity[gradient_display] * 0.3)
 
-            # Create property with BOTH functions (like the canvas)
+            # ===== CREATE PROPERTY AND VOLUME =====
             final_prop = vtk.vtkVolumeProperty()
             final_prop.SetColor(color_func)
             final_prop.SetScalarOpacity(scalar_opacity_func)
             final_prop.SetGradientOpacity(grad_opacity_func)
             final_prop.ShadeOn()
             final_prop.SetInterpolationTypeToLinear()
-        
-            # Set shading parameters for better visual quality
+    
             final_prop.SetAmbient(0.2)
             final_prop.SetDiffuse(0.7)
             final_prop.SetSpecular(0.1)
 
-            # Create mapper
             final_mapper = vtk.vtkGPUVolumeRayCastMapper()
             final_mapper.SetInputData(final_volume)
 
@@ -412,14 +445,14 @@ class NDShaderRenderer:
 
             self.current_volume = final_volume_obj
 
-            
-
             self.renderer.Render()
             print(f"   ✅ Render complete")
 
         except Exception as e:
             print(f"   ❌ Error: {e}")
             traceback.print_exc()
+
+
 
     def force_volume_visible(self):
         """Force the volume to be bright red and fully opaque"""

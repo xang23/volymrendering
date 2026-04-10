@@ -5,12 +5,14 @@ import numpy as np
 import vtk
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 import time
-from volume_renderer import VolumeRenderer
 from unified_tf_canvas import UnifiedTFCanvas
 from tf_canvas_widget import TFCanvasWidget
+from nd_shader_renderer import NDShaderRenderer
+from nd_widget_manager import NDWidgetManager
+from widget_factory import WidgetFactory, WidgetType
 
 class ArtifactAnalyzer(QtWidgets.QMainWindow):
-    """Separate window for controlled artifact analysis"""
+    """Separate window for controlled artifact analysis with shared renderer"""
     
     def __init__(self, main_app, parent=None):
         super().__init__(parent)
@@ -31,6 +33,10 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         self.test_configs = self.create_test_configurations()
         self.current_results = []
         
+        # Shared renderer
+        self.shared_renderer = None
+        self.temp_nd_manager = None
+        
         self.setup_ui()
     
     def normalize_to_255(self, data):
@@ -42,9 +48,6 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
     
     def create_test_configurations(self):
         """Create predefined test configurations with consistent colors"""
-        from widget_factory import WidgetFactory, WidgetType
-        
-        # Use the same neutral color for ALL tests
         NEUTRAL_COLOR = (1.0, 1.0, 1.0)  # White - most neutral
         
         return [
@@ -162,17 +165,6 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         self.feat_y.setCurrentText('Gradient')
         control_layout.addWidget(self.feat_y)
         
-        # Sampling control
-        control_layout.addWidget(QtWidgets.QLabel("Sampling:"))
-        self.sampling = QtWidgets.QComboBox()
-        self.sampling.addItems(['1x (fast)', '2x', '4x (normal)', '8x (slow)'])
-        control_layout.addWidget(self.sampling)
-        
-        # Load Saved TF button
-        self.load_tf_btn = QtWidgets.QPushButton("Load Saved TF")
-        self.load_tf_btn.clicked.connect(self.load_saved_tf)
-        control_layout.addWidget(self.load_tf_btn)
-        
         # Run button
         self.run_btn = QtWidgets.QPushButton("Run All Tests")
         self.run_btn.clicked.connect(self.run_all_tests)
@@ -190,17 +182,21 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         self.scroll = QtWidgets.QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.results_widget = QtWidgets.QWidget()
-        self.results_layout = QtWidgets.QHBoxLayout(self.results_widget)
-        self.results_layout.setSpacing(20)
+        self.results_layout = QtWidgets.QGridLayout(self.results_widget)
+        self.results_layout.setSpacing(15)
         self.scroll.setWidget(self.results_widget)
         layout.addWidget(self.scroll)
+        
+        self.current_row = 0
+        self.current_col = 0
+        self.max_cols = 2
     
     def create_test_frame(self, test_name, feat_x, feat_y):
         """Create a frame for a single test result"""
         frame = QtWidgets.QFrame()
         frame.setFrameStyle(QtWidgets.QFrame.Box)
         frame.setLineWidth(2)
-        frame.setMinimumWidth(400)
+        frame.setMinimumWidth(550)
         layout = QtWidgets.QVBoxLayout(frame)
         
         # Test name
@@ -214,7 +210,7 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         feat_label.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(feat_label)
         
-        # Placeholder for mini TF canvas (will be replaced in update)
+        # Placeholder for mini TF canvas
         tf_placeholder = QtWidgets.QFrame()
         tf_placeholder.setMinimumHeight(80)
         tf_placeholder.setStyleSheet("background-color: #222; border: 1px solid #555;")
@@ -224,11 +220,12 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         # Stats label
         stats = QtWidgets.QLabel("Waiting...")
         stats.setAlignment(Qt.AlignCenter)
+        stats.setStyleSheet("font-family: monospace; font-size: 10px;")
         layout.addWidget(stats)
         
         # VTK placeholder
         vtk_placeholder = QtWidgets.QFrame()
-        vtk_placeholder.setMinimumHeight(200)
+        vtk_placeholder.setMinimumHeight(250)
         vtk_placeholder.setStyleSheet("background-color: black;")
         layout.addWidget(vtk_placeholder)
         frame.vtk_placeholder = vtk_placeholder
@@ -236,317 +233,166 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         # Store references
         frame.stats_label = stats
         frame.vtk_widget = None
-        frame.renderer = None
         frame.tf_canvas = None
         frame.last_fps = 0
         frame.last_avg = 0
         
         return frame
     
-    def update_test_frame(self, frame, test_name, feat_x, feat_y, sampling_factor):
-        """Update frame with actual rendering and TF visualization"""
-        try:
-            layout = frame.layout()
-            
-            # ===== 1. Create/Update Mini TF Canvas =====
-            # Get data for this feature pair
-            data_x = self.all_features[feat_x]
-            data_y = self.all_features[feat_y]
-            
-            # Normalize for display
-            norm_x = self.normalize_to_255(data_x)
-            norm_y = self.normalize_to_255(data_y)
-            
-            # Create mini TF canvas
-            mini_tf = UnifiedTFCanvas(
-                tf_type='2d',
-                data=norm_x,
-                gradient_data=norm_y
-            )
-            mini_tf.setFixedHeight(80)
-            mini_tf.set_projection_features(feat_x, feat_y)
-            
-            # Load projected widgets
-            projected = self.nd_manager.project_to_2d(feat_x, feat_y)
-            for widget in projected:
-                mini_tf.add_widget(widget)
-            mini_tf._draw()
-            
-            # Replace placeholder with actual TF canvas
-            from tf_canvas_widget import TFCanvasWidget
-            tf_wrapper = TFCanvasWidget(mini_tf, self, label='')
-            tf_wrapper.reset_btn.hide()
-            
-            tf_index = layout.indexOf(frame.tf_placeholder)
-            layout.removeWidget(frame.tf_placeholder)
-            frame.tf_placeholder.deleteLater()
-            layout.insertWidget(tf_index, tf_wrapper)
-            frame.tf_canvas = mini_tf
-            # ===========================================
-            
-            # ===== 2. Create VTK Render View =====
-            # Remove old VTK widget if it exists
-            if hasattr(frame, 'vtk_widget') and frame.vtk_widget:
-                frame.vtk_widget.close()
-                layout.removeWidget(frame.vtk_widget)
-            
-            # Create new VTK widget
-            vtk_widget = QVTKRenderWindowInteractor()
-            vtk_widget.setMinimumHeight(200)
-            
-            # Create renderer
-            renderer = vtk.vtkRenderer()
-            vtk_widget.GetRenderWindow().AddRenderer(renderer)
-            
-            # Setup volume rendering
-            vol_renderer = VolumeRenderer(f"test_{test_name}")
-            vol_renderer.set_volume_data(self.image_data, self.reader)
-            renderer.AddVolume(vol_renderer.volume)
-            renderer.ResetCamera()
-            
-            # Add to layout (replace placeholder)
-            vtk_index = layout.indexOf(frame.vtk_placeholder)
-            layout.removeWidget(frame.vtk_placeholder)
-            frame.vtk_placeholder.deleteLater()
-            layout.insertWidget(vtk_index, vtk_widget)
-            
-            # Store references
-            frame.vtk_widget = vtk_widget
-            frame.renderer = vol_renderer
-            
-            # Initialize
-            vtk_widget.Initialize()
-            vtk_widget.Start()
-            # ===================================
-            
-            # ===== 3. Apply TF to Renderer =====
-            # Save current widgets from main canvas
-            original_widgets = self.main_app.tf_canvas.widgets.copy()
-            
-            # Temporarily set the test widgets on the main canvas
-            self.main_app.tf_canvas.widgets = self.nd_manager.widgets.copy()
-            
-            # Set the correct feature data for sampling
-            self.main_app.tf_canvas.data = norm_x
-            self.main_app.tf_canvas.gradient_data = norm_y
-            
-            # Sample from the canvas
-            samples = self.main_app.tf_canvas.sample_for_vtk()
-            
-            # Restore original widgets
-            self.main_app.tf_canvas.widgets = original_widgets
-            # ===================================
-            
-            if samples:
-                intensities = [s[0] for s in samples]
-                opacities = [s[1] for s in samples]
-                colors = [s[2] for s in samples]
-                
-                # Scale to data range
-                x_min, x_max = np.min(data_x), np.max(data_x)
-                scaled = [x_min + (i/255.0)*(x_max - x_min) for i in intensities]
-                
-                vol_renderer.update_transfer_functions(
-                    scaled, opacities, colors, (x_min, x_max)
-                )
-            
-            # ===== 4. Measure Performance =====
-            times = []
-            for i in range(30):
-                start = time.perf_counter()
-                vtk_widget.GetRenderWindow().Render()
-                end = time.perf_counter()
-                times.append((end - start) * 1000)
-            
-            avg_time = sum(times) / len(times)
-            fps = 1000 / avg_time
-            min_time = min(times)
-            max_time = max(times)
-            std_dev = np.std(times)
-            
-            # Store stats in frame
-            frame.last_fps = fps
-            frame.last_avg = avg_time
-            
-            # Update stats label
-            frame.stats_label.setText(
-                f"FPS: {fps:.1f} | {avg_time:.2f}ms\n"
-                f"Min: {min_time:.2f} Max: {max_time:.2f}\n"
-                f"Std: {std_dev:.2f}"
-            )
-            
-            # Force layout update
-            layout.update()
-            
-        except Exception as e:
-            print(f"Error in update_test_frame: {e}")
-            import traceback
-            traceback.print_exc()
-            frame.stats_label.setText(f"Error: {str(e)[:30]}")
+    def add_mini_tf_to_frame(self, frame, test, feat_x, feat_y):
+        """Lägg till mini TF canvas i frame"""
+        # Get data for this feature pair
+        data_x = self.all_features[feat_x]
+        data_y = self.all_features[feat_y]
+        
+        # Normalize for display
+        norm_x = self.normalize_to_255(data_x)
+        norm_y = self.normalize_to_255(data_y)
+        
+        # Create mini TF canvas
+        mini_tf = UnifiedTFCanvas(
+            tf_type='2d',
+            data=norm_x,
+            gradient_data=norm_y
+        )
+        mini_tf.setFixedHeight(80)
+        mini_tf.set_projection_features(feat_x, feat_y)
+        
+        # Ladda widgets till mini canvas
+        for w_data in test['widgets']:
+            widget = WidgetFactory.create_widget(w_data['type'], **w_data['params'])
+            mini_tf.add_widget(widget)
+        mini_tf._draw()
+        
+        # Ersätt placeholder med TF canvas
+        layout = frame.layout()
+        tf_wrapper = TFCanvasWidget(mini_tf, self, label='')
+        tf_wrapper.reset_btn.hide()
+        
+        tf_index = layout.indexOf(frame.tf_placeholder)
+        layout.removeWidget(frame.tf_placeholder)
+        frame.tf_placeholder.deleteLater()
+        layout.insertWidget(tf_index, tf_wrapper)
+        frame.tf_canvas = mini_tf
     
     def run_all_tests(self):
-        """Run all test configurations"""
-        # Let user select which feature pairs to test
+        """Run all test configurations - create new renderer for each test"""
         selected_pairs = self.setup_feature_selection()
         if not selected_pairs:
             return
-        
+    
         self.clear_results()
-        sampling_idx = self.sampling.currentIndex()
-        sampling_factors = [1, 2, 4, 8]
-        sampling_factor = sampling_factors[sampling_idx]
-        
+        self.current_row = 0
+        self.current_col = 0
+    
         for feat_x, feat_y in selected_pairs:
             for test in self.test_configs:
-                # Create result frame for this test
+                print(f"\n🔬 Testing {test['name']} with {feat_x} vs {feat_y}")
+            
+                # Skapa frame
                 frame = self.create_test_frame(test['name'], feat_x, feat_y)
-                self.results_layout.addWidget(frame)
+                self.results_layout.addWidget(frame, self.current_row, self.current_col)
+            
+                self.current_col += 1
+                if self.current_col >= self.max_cols:
+                    self.current_col = 0
+                    self.current_row += 1
+            
                 QtWidgets.QApplication.processEvents()
-                
-                # Apply test configuration
-                self.apply_test_configuration(test)
-                
-                # Update the frame with rendering
-                self.update_test_frame(frame, test['name'], feat_x, feat_y, sampling_factor)
-                
-                # Store result
+            
+                # Lägg till mini TF canvas
+                self.add_mini_tf_to_frame(frame, test, feat_x, feat_y)
+            
+                # Skapa temporär nd_manager för detta test
+                temp_nd_manager = NDWidgetManager()
+                for w_data in test['widgets']:
+                    widget = WidgetFactory.create_widget(w_data['type'], **w_data['params'])
+                    temp_nd_manager.add_widget(widget)
+            
+                # Skapa ny renderer för detta test
+                renderer = NDShaderRenderer(
+                    self.image_data,
+                    list(self.all_features.keys()),
+                    temp_nd_manager,
+                    f"test_{test['name']}_{feat_x}_{feat_y}"
+                )
+            
+                # ===== VIKTIGT: Använd bara load_only_features, INTE set_feature_pair =====
+                # Detta skapar en 2-komponents volym
+                renderer.load_only_features(feat_x, feat_y)
+            
+                # Skapa VTK widget
+                vtk_widget = QVTKRenderWindowInteractor()
+                vtk_widget.setMinimumHeight(250)
+                vtk_widget.GetRenderWindow().AddRenderer(renderer.get_renderer())
+            
+                layout = frame.layout()
+                vtk_index = layout.indexOf(frame.vtk_placeholder)
+                layout.removeWidget(frame.vtk_placeholder)
+                frame.vtk_placeholder.deleteLater()
+                layout.insertWidget(vtk_index, vtk_widget)
+            
+                frame.vtk_widget = vtk_widget
+                frame.renderer = renderer
+            
+                vtk_widget.Initialize()
+                vtk_widget.Start()
+            
+                # Mät prestanda
+                times = []
+                for i in range(20):
+                    start = time.perf_counter()
+                    vtk_widget.GetRenderWindow().Render()
+                    end = time.perf_counter()
+                    times.append((end - start) * 1000)
+            
+                avg_time = sum(times) / len(times)
+                fps = 1000 / avg_time
+            
+                frame.last_fps = fps
+                frame.last_avg = avg_time
+                frame.stats_label.setText(f"FPS: {fps:.1f} | {avg_time:.2f}ms")
+            
                 self.current_results.append({
                     'tf_name': test['name'],
                     'feat_x': feat_x,
                     'feat_y': feat_y,
-                    'fps': frame.last_fps,
-                    'avg_ms': frame.last_avg,
-                    'frame': frame
+                    'fps': fps,
+                    'avg_ms': avg_time,
+                    'frame': frame,
+                    'renderer': renderer
                 })
-    
-    def run_all_tests_with_current_widgets(self, tf_name):
-        """Run all feature pair tests with current widget configuration"""
-        selected_pairs = self.setup_feature_selection()
-        if not selected_pairs:
-            return
-        
-        self.clear_results()
-        sampling_idx = self.sampling.currentIndex()
-        sampling_factors = [1, 2, 4, 8]
-        sampling_factor = sampling_factors[sampling_idx]
-        
-        for feat_x, feat_y in selected_pairs:
-            # Create result frame
-            frame = self.create_test_frame(tf_name, feat_x, feat_y)
-            self.results_layout.addWidget(frame)
-            QtWidgets.QApplication.processEvents()
             
-            # Update the frame with rendering
-            self.update_test_frame(frame, tf_name, feat_x, feat_y, sampling_factor)
-            
-            # Store result info
-            self.current_results.append({
-                'tf_name': tf_name,
-                'feat_x': feat_x,
-                'feat_y': feat_y,
-                'fps': frame.last_fps,
-                'avg_ms': frame.last_avg,
-                'frame': frame
-            })
+                QtWidgets.QApplication.processEvents()
     
-    def apply_test_configuration(self, test):
-        """Apply test configuration to nd_manager"""
-        from widget_factory import WidgetFactory
-        
-        # Clear existing widgets
-        self.nd_manager.widgets.clear()
-        
-        # Create widgets from test config
-        for w_data in test['widgets']:
-            widget = WidgetFactory.create_widget(
-                w_data['type'],
-                **w_data['params']
-            )
-            self.nd_manager.add_widget(widget)
+        print(f"\n✅ Complete - {len(self.current_results)} tests")
     
     def clear_results(self):
         """Clear all test results"""
+        # Stäng alla VTK widgets
+        for result in self.current_results:
+            frame = result.get('frame')
+            if frame and hasattr(frame, 'vtk_widget') and frame.vtk_widget:
+                try:
+                    frame.vtk_widget.close()
+                except:
+                    pass
+            if frame and hasattr(frame, 'tf_canvas') and frame.tf_canvas:
+                try:
+                    frame.tf_canvas.close()
+                except:
+                    pass
+        
+        # Rensa layout
         while self.results_layout.count():
-            child = self.results_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+            item = self.results_layout.itemAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+            self.results_layout.removeItem(item)
+        
         self.current_results = []
-    
-    def load_saved_tf(self):
-        """Load a saved transfer function from your TF manager"""
-        tf_names = list(self.main_app.tf_manager.saved_tfs.keys())
-        
-        if not tf_names:
-            QtWidgets.QMessageBox.warning(self, "No TFs", "No saved transfer functions found")
-            return
-        
-        name, ok = QtWidgets.QInputDialog.getItem(
-            self, "Select TF", "Choose a saved transfer function:", 
-            tf_names, 0, False
-        )
-        
-        if not ok:
-            return
-        
-        # Load the TF data
-        tf_data = self.main_app.tf_manager.saved_tfs[name]
-        
-        # Convert to widget format
-        self.convert_tf_to_widgets(tf_data)
-        
-        # Run tests with this TF
-        self.run_all_tests_with_current_widgets(name)
-    
-    def convert_tf_to_widgets(self, tf_data):
-        """Convert a point-based TF to widget format - WITH PROPER NORMALIZATION"""
-        from widget_factory import WidgetFactory, WidgetType
-    
-        # Clear existing widgets
-        self.nd_manager.widgets.clear()
-    
-        # Get TF points
-        xs = tf_data.get('x_abs', tf_data.get('x_rel', []))
-        ys = tf_data.get('y', [])
-        colors = tf_data.get('colors', [])
-    
-        # Get data range from main app
-        int_min, int_max = self.main_app.intensity_range
-        print(f"Converting TF with data range: [{int_min:.1f}, {int_max:.1f}]")
-    
-        # Use neutral color for all widgets
-        NEUTRAL_COLOR = (1.0, 1.0, 1.0)
-    
-        # Create a widget for each significant point
-        for i, (x, y, color) in enumerate(zip(xs, ys, colors)):
-            if y < 0.05:  # Skip very low opacity
-                continue
-        
-            # ===== CRITICAL: Normalize to 0-255 display space =====
-            if int_max > int_min:
-                x_display = 255.0 * (x - int_min) / (int_max - int_min)
-            else:
-                x_display = 128  # Default if range is zero
-        
-            # Clamp to valid range
-            x_display = max(0, min(255, x_display))
-        
-            print(f"Point {i}: Raw {x:.1f} → Display {x_display:.1f}")
-            # ======================================================
-        
-            # Create Gaussian widget at this point (in display space!)
-            widget = WidgetFactory.create_widget(
-                WidgetType.GAUSSIAN,
-                center_intensity=x_display,  # ← Now in 0-255!
-                center_gradient=128,  # Default gradient
-                intensity_std=15,  # In display space
-                gradient_std=30,
-                opacity=y,
-                color=NEUTRAL_COLOR,
-                blend_mode='max'
-            )
-            self.nd_manager.add_widget(widget)
-    
-        print(f"Converted {len(self.nd_manager.widgets)} TF points to widgets (all in 0-255 space)")
+        self.current_row = 0
+        self.current_col = 0
     
     def setup_feature_selection(self):
         """Dialog for selecting which feature pairs to test"""
@@ -566,7 +412,6 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
                 layout.addWidget(cb)
                 checkboxes.append((cb, features[i], features[j]))
         
-        # Buttons
         btn_layout = QtWidgets.QHBoxLayout()
         
         select_all = QtWidgets.QPushButton("Select All")
@@ -596,3 +441,18 @@ class ArtifactAnalyzer(QtWidgets.QMainWindow):
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             return result
         return []
+    
+    def closeEvent(self, event):
+        """Städa upp alla renderers när fönstret stängs"""
+        for result in self.current_results:
+            if 'renderer' in result and result['renderer']:
+                try:
+                    result['renderer'].cleanup()
+                except:
+                    pass
+        self.clear_results()
+        event.accept()
+
+
+
+    

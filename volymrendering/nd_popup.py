@@ -3,11 +3,13 @@ from PyQt5 import QtWidgets
 from PyQt5.QtCore import Qt
 from unified_tf_canvas import UnifiedTFCanvas
 from tf_canvas_widget import TFCanvasWidget
-from widget_manager_ui import WidgetManager
 from nd_shader_renderer import NDShaderRenderer
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 import numpy as np
 import time
+import vtk
+import os
+from datetime import datetime
 
 class NDFeaturePopup(QtWidgets.QMainWindow):
     
@@ -29,7 +31,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             if name:
                 self.feature_names.append(name)
     
-        print(f"📊 Actual features in point data: {self.feature_names}")
+        print(f"Actual features in point data: {self.feature_names}")
         
         self.setWindowTitle(f"nD Explorer: {feat_x} vs {feat_y}")
         self.setGeometry(200, 200, 1400, 800)
@@ -95,7 +97,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         main_layout.addWidget(left_widget, 2)
 
-        # MIDDLE: Simple Widget Controls (not the full WidgetManager)
+        # MIDDLE: Simple Widget Controls
         middle_widget = QtWidgets.QWidget()
         middle_layout = QtWidgets.QVBoxLayout(middle_widget)
 
@@ -111,21 +113,21 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         # Button layout
         button_layout = QtWidgets.QHBoxLayout()
     
-        add_btn = QtWidgets.QPushButton("➕ Add Widget")
+        add_btn = QtWidgets.QPushButton("Add Widget")
         add_btn.clicked.connect(self.add_widget)
         button_layout.addWidget(add_btn)
     
-        delete_btn = QtWidgets.QPushButton("❌ Delete Selected")
+        delete_btn = QtWidgets.QPushButton("Delete Selected")
         delete_btn.clicked.connect(self.delete_selected_widget)
         button_layout.addWidget(delete_btn)
     
-        clear_btn = QtWidgets.QPushButton("🗑 Clear All")
+        clear_btn = QtWidgets.QPushButton("Clear All")
         clear_btn.clicked.connect(self.clear_all_widgets)
         button_layout.addWidget(clear_btn)
     
         middle_layout.addLayout(button_layout)
 
-        # Parameter controls (simple version)
+        # Parameter controls
         self.param_group = QtWidgets.QGroupBox("Widget Parameters")
         self.param_layout = QtWidgets.QFormLayout()
         self.param_group.setLayout(self.param_layout)
@@ -134,24 +136,20 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         # Sync buttons
         sync_layout = QtWidgets.QHBoxLayout()
-        sync_to_nd_btn = QtWidgets.QPushButton("🔄 Sync to 3D")
+        sync_to_nd_btn = QtWidgets.QPushButton("Sync to 3D")
         sync_to_nd_btn.clicked.connect(self.sync_to_nd)
         sync_layout.addWidget(sync_to_nd_btn)
     
-        load_from_nd_btn = QtWidgets.QPushButton("📥 Load from 3D")
+        load_from_nd_btn = QtWidgets.QPushButton("Load from 3D")
         load_from_nd_btn.clicked.connect(self.load_from_nd)
         sync_layout.addWidget(load_from_nd_btn)
     
         middle_layout.addLayout(sync_layout)
 
-        # Test buttons
-        middle_layout.addStretch()
         close_btn = QtWidgets.QPushButton("Close")
         close_btn.clicked.connect(self.close)
         middle_layout.addWidget(close_btn)
 
-        main_layout.addWidget(middle_widget, 1)
-        # Force real volume red
         force_btn = QtWidgets.QPushButton("Force Real Volume Red")
         force_btn.clicked.connect(self.force_real_red)
         middle_layout.addWidget(force_btn)
@@ -171,42 +169,34 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         # CREATE RENDERER
         try:
-            print(f"\n🔧 Creating NDShaderRenderer for popup...")
+            print(f"\nCreating NDShaderRenderer for popup...")
             self.mc_renderer = NDShaderRenderer(
                 self.image_data,
                 self.feature_names,
                 self.nd_manager,
                 f"popup_{self.feat_x}_{self.feat_y}"
             )
-            print(f"✅ NDShaderRenderer created successfully")
+            print(f"NDShaderRenderer created successfully")
             
-            print(f"🎯 Adding renderer to VTK widget...")
+            print(f"Adding renderer to VTK widget...")
             ren_win = self.vtk_widget.GetRenderWindow()
             ren_win.AddRenderer(self.mc_renderer.get_renderer())
-            print(f"✅ Renderer added to VTK widget")
+            print(f"Renderer added to VTK widget")
             
             right_layout.addWidget(self.vtk_widget)
-            print(f"✅ VTK widget added to layout")
+            print(f"VTK widget added to layout")
             
             self.vtk_widget.show()
             self.vtk_widget.Initialize()
 
             # Test simple render first
-            print("\n🔧 Running simple test render...")
-            self.mc_renderer.test_simple_render()
-            ren_win.Render()
-            print("✅ Simple test render complete")
-            
-            time.sleep(1)
-            
-            # Apply widget-based transfer function
-            print(f"\n🎯 Applying widget-based TF for {self.feat_x} vs {self.feat_y}...")
+            print(f"\nApplying widget-based TF for {self.feat_x} vs {self.feat_y}...")
             self.mc_renderer.set_feature_pair(self.feat_x, self.feat_y)
             ren_win.Render()
-            print(f"✅ Widget-based render complete")
+            print(f"Widget-based render complete")
             
         except Exception as e:
-            print(f"❌ CRASH in renderer creation: {e}")
+            print(f"CRASH in renderer creation: {e}")
             traceback.print_exc()
             self.mc_renderer = None
             error_label = QtWidgets.QLabel(f"Render error: {str(e)}")
@@ -216,6 +206,9 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             self.vtk_widget.show()
 
         main_layout.addWidget(right_widget, 2)
+        
+        # Setup widget tester
+        self.setup_widget_tester()
 
     def force_real_red(self):
         if hasattr(self, 'mc_renderer') and self.mc_renderer:
@@ -229,32 +222,20 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         for widget in projected:
             self.tf_canvas.add_widget(widget)
         
-        if hasattr(self, 'widget_manager'):
-            self.widget_manager.update_widget_list()
-        
         print(f"Loaded {len(projected)} widgets into popup")
         self.update_render_view()
     
     def on_widget_moved(self, widget_2d, feat_x, feat_y, new_x, new_y):
         print(f"Widget moved: ({new_x:.1f}, {new_y:.1f}) for features ({feat_x}, {feat_y})")
     
-        # Update the widget's display position (for the canvas)
         widget_2d.center_intensity = new_x
         widget_2d.center_gradient = new_y
     
-        # CRITICAL: Update BOTH features in nd_coords
-        # feat_x is the X-axis feature (Gradient in your example)
-        # feat_y is the Y-axis feature (Laplacian in your example)
         widget_2d.nd_coords[feat_x] = new_x
         widget_2d.nd_coords[feat_y] = new_y
     
-        # Also update the nd_manager (redundant but safe)
         self.nd_manager.update_nd_position(widget_2d, new_x, new_y, feat_x, feat_y)
-    
-        # Update the widget list display
         self.update_widget_list()
-    
-        # AUTO-SYNC to 3D renderer
         self.sync_to_nd()
     
     def update_render_view(self):
@@ -265,61 +246,43 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             return
 
         try:
-            # Get ALL widgets from the nd_manager (master state)
             all_widgets = self.nd_manager.widgets
             print(f"   Got {len(all_widgets)} widgets from nd_manager")
         
-            # Build transfer function arrays for THIS projection
-            intensities = []      # Values for feat_x
-            opacities = []        # Opacity at each widget
-            colors = []           # RGB color for each widget
-            gradient_values = []  # Values for feat_y (if 2D TF)
-            gradient_opacities = [] # Opacities for feat_y
+            intensities = []
+            opacities = []
+            colors = []
+            gradient_values = []
+            gradient_opacities = []
         
             for widget in all_widgets:
-                # Get widget's position in current feature pair projection
-                x_val = widget.nd_coords.get(self.feat_x, 128)  # Display coords 0-255
-                y_val = widget.nd_coords.get(self.feat_y, 128)  # Display coords 0-255
+                x_val = widget.nd_coords.get(self.feat_x, 128)
+                y_val = widget.nd_coords.get(self.feat_y, 128)
             
                 intensities.append(x_val)
                 opacities.append(widget.opacity)
                 colors.append(widget.color)
-            
-                # For 2D transfer function, use second feature as gradient
                 gradient_values.append(y_val)
                 gradient_opacities.append(widget.opacity)
         
             print(f"   Built TF with {len(intensities)} widgets")
-            if intensities:
-                print(f"   Sample widget: intensity={intensities[0]:.1f}, opacity={opacities[0]:.2f}, color={colors[0]}")
         
-            # Update the renderer with the current widget state
             if intensities:
                 self.mc_renderer.update_transfer_functions(
-                    intensities,           # Values for feat_x
-                    opacities,            # Opacity at each widget
-                    colors,               # Color for each widget
-                    self.x_range,         # Raw intensity range for feat_x
-                    gradient_values,      # Values for feat_y
-                    gradient_opacities,   # Opacities for feat_y
-                    self.y_range         # Raw gradient range for feat_y
+                    intensities, opacities, colors,
+                    self.x_range, gradient_values, gradient_opacities, self.y_range
                 )
             else:
-                # No widgets - use default gray volume
                 self.mc_renderer.update_transfer_functions(
-                    [0, 255], [0, 0], [(0.5, 0.5, 0.5)],
-                    self.x_range
+                    [0, 255], [0, 0], [(0.5, 0.5, 0.5)], self.x_range
                 )
         
-            # Set the feature pair for any additional configuration
             self.mc_renderer.set_feature_pair(self.feat_x, self.feat_y)
-        
-            # Force render
             self.vtk_widget.GetRenderWindow().Render()
-            print(f"   ✅ Render updated with {len(intensities)} active widgets")
+            print(f"   Render updated with {len(intensities)} active widgets")
     
         except Exception as e:
-            print(f"   ❌ Error in update_render_view: {e}")
+            print(f"   Error in update_render_view: {e}")
             traceback.print_exc()
     
     def closeEvent(self, event):
@@ -327,140 +290,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             self.vtk_widget.close()
         event.accept()
 
-    def test_mid_widget(self):
-        print("\n🎯 Creating test widget at middle of range")
-        if hasattr(self, 'tf_canvas'):
-            from tf_widgets import GaussianWidget
-            test_widget = GaussianWidget()
-            test_widget.center_intensity = 128
-            test_widget.center_gradient = 128
-            test_widget.opacity = 1.0
-            test_widget.color = (1.0, 0.0, 0.0)
-            self.tf_canvas.clear_widgets()
-            self.tf_canvas.add_widget(test_widget)
-            self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
-            if hasattr(self, 'widget_manager'):
-                self.widget_manager.update_widget_list()
-            self.update_render_view()
-            print("✅ Test widget added at center")
-
-    def test_red_cube(self):
-        if hasattr(self, 'mc_renderer') and self.mc_renderer:
-            self.mc_renderer.test_force_red_independent()
-    def test_cube_with_widget(self):
-        if hasattr(self, 'mc_renderer') and self.mc_renderer:
-            self.mc_renderer.test_red_cube_with_widget()
-    def test_isolated(self):
-        if hasattr(self, 'mc_renderer') and self.mc_renderer:
-            self.mc_renderer.test_isolated_volume()
-
-    def test_intensity_only(self):
-        if hasattr(self, 'mc_renderer') and self.mc_renderer:
-            self.mc_renderer.force_intensity_volume()
-
-    def setup_widget_manager_sync(self):
-        """Setup widget manager with nd_manager synchronization"""
-        # Store original methods
-        original_add_widget = self.widget_manager.add_preset_widget
-        original_clear_widgets = self.widget_manager.clear_btn.clicked
-        original_duplicate_widget = self.widget_manager.duplicate_widget
-        original_delete_widget = self.widget_manager.delete_widget
-    
-        # Override with sync versions
-        self.widget_manager.add_preset_widget = self.sync_add_preset_widget
-        self.widget_manager.duplicate_widget = self.sync_duplicate_widget
-    
-        # Connect clear button to sync version
-        self.widget_manager.clear_btn.clicked.disconnect()
-        self.widget_manager.clear_btn.clicked.connect(self.sync_clear_widgets)
-    
-        # Store reference to original delete method
-        self.original_delete_widget = self.widget_manager.delete_widget
-        self.widget_manager.delete_widget = self.sync_delete_widget
-
-    def sync_add_preset_widget(self):
-        """Add widget to both canvas and nd_manager"""
-        # Get widget data from preset combo
-        widget_data = self.widget_manager.preset_combo.currentData()
-        widget_type_str, preset_name = widget_data
-    
-        from widget_factory import WidgetType, WidgetFactory
-        widget_type = WidgetType(widget_type_str)
-        new_widget = WidgetFactory.create_widget(widget_type, preset=preset_name)
-    
-        # Add to nd_manager first (master)
-        self.nd_manager.add_widget(new_widget)
-    
-        # Then add to canvas
-        self.tf_canvas.add_widget(new_widget)
-    
-        # Update widget list
-        self.widget_manager.update_widget_list()
-    
-        # Refresh render
-        self.update_render_view()
-        print(f"✅ Added preset widget and synced with nd_manager")
-
-    def sync_clear_widgets(self):
-        """Clear all widgets from both canvas and nd_manager"""
-        # Clear nd_manager
-        self.nd_manager.widgets.clear()
-    
-        # Clear canvas
-        self.tf_canvas.clear_widgets()
-    
-        # Update widget list
-        self.widget_manager.update_widget_list()
-    
-        # Refresh render
-        self.update_render_view()
-        print(f"✅ Cleared all widgets and synced with nd_manager")
-
-    def sync_duplicate_widget(self):
-        """Duplicate widget in both canvas and nd_manager"""
-        selected_items = self.widget_manager.widget_list.selectedItems()
-        if selected_items and self.widget_manager.current_widget:
-            import copy
-            new_widget = copy.copy(self.widget_manager.current_widget)
-            # Offset slightly so they don't overlap
-            new_widget.center_intensity = min(255, new_widget.center_intensity + 10)
-            new_widget.center_gradient = min(255, new_widget.center_gradient + 10)
-        
-            # Add to nd_manager
-            self.nd_manager.add_widget(new_widget)
-        
-            # Add to canvas
-            self.tf_canvas.add_widget(new_widget)
-        
-            # Update widget list
-            self.widget_manager.update_widget_list()
-        
-            # Refresh render
-            self.update_render_view()
-            print(f"✅ Duplicated widget and synced with nd_manager")
-
-    def sync_delete_widget(self, widget):
-        """Delete widget from both canvas and nd_manager"""
-        if widget in self.tf_canvas.widgets:
-            # Remove from nd_manager
-            self.nd_manager.remove_widget(widget)
-        
-            # Remove from canvas
-            self.tf_canvas.remove_widget(widget)
-        
-            # Update widget list
-            self.widget_manager.update_widget_list()
-        
-            # Hide parameters panel
-            self.widget_manager.param_group.setVisible(False)
-            self.widget_manager.current_widget = None
-        
-            # Refresh render
-            self.update_render_view()
-            print(f"✅ Deleted widget and synced with nd_manager")
-
     def update_widget_list(self):
-        """Update the widget list display"""
         self.widget_list.clear()
         for i, widget in enumerate(self.tf_canvas.widgets):
             item = QtWidgets.QListWidgetItem(f"{i+1}. {widget.widget_type.value} (X:{widget.center_intensity:.0f}, Y:{widget.center_gradient:.0f})")
@@ -468,7 +298,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             self.widget_list.addItem(item)
 
     def on_widget_selected(self):
-        """Handle widget selection"""
         selected = self.widget_list.selectedItems()
         if not selected:
             self.param_group.setVisible(False)
@@ -478,20 +307,39 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.current_widget = self.tf_canvas.widgets[idx]
         self.tf_canvas.active_widget = idx
         self.tf_canvas._draw()
-    
-        # Update parameter controls
+        
+        # SYNC: Uppdatera test panel med denna widgets info
+        self.test_x.setValue(int(self.current_widget.center_intensity))
+        self.test_y.setValue(int(self.current_widget.center_gradient))
+        
+        # Identifiera shape
+        shape = self.identify_widget_shape(self.current_widget)
+        self.test_widget_type.setCurrentText(shape)
+        self.browse_label.setText(shape)
+        
         self.update_parameter_controls()
 
+    def identify_widget_shape(self, widget):
+        """Identifiera vilken shape en widget har"""
+        if hasattr(widget, 'intensity_radius'):
+            return 'Ellipsoid'
+        elif hasattr(widget, 'direction'):
+            return 'Triangular'
+        elif hasattr(widget, 'intensity_width') and hasattr(widget, 'gradient_height'):
+            # Kolla om det är Gaussian (har intensity_std) eller Rectangular/Diamond
+            if hasattr(widget, 'intensity_std'):
+                return 'Gaussian'
+            else:
+                return 'Rectangular'
+        return 'Gaussian'
+
     def update_parameter_controls(self):
-        """Update parameter controls for selected widget"""
-        # Clear existing
         for i in reversed(range(self.param_layout.count())):
             self.param_layout.itemAt(i).widget().setParent(None)
     
         if not self.current_widget:
             return
     
-        # Add position controls
         self.x_spin = QtWidgets.QDoubleSpinBox()
         self.x_spin.setRange(0, 255)
         self.x_spin.setValue(self.current_widget.center_intensity)
@@ -504,7 +352,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.y_spin.valueChanged.connect(self.on_y_changed)
         self.param_layout.addRow("Y Position:", self.y_spin)
     
-        # Opacity control
         self.opacity_spin = QtWidgets.QDoubleSpinBox()
         self.opacity_spin.setRange(0, 1)
         self.opacity_spin.setSingleStep(0.05)
@@ -512,7 +359,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.opacity_spin.valueChanged.connect(self.on_opacity_changed)
         self.param_layout.addRow("Opacity:", self.opacity_spin)
     
-        # Color button
         self.color_btn = QtWidgets.QPushButton("Change Color")
         self.color_btn.clicked.connect(self.change_color)
         self.param_layout.addRow("Color:", self.color_btn)
@@ -524,7 +370,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         if self.current_widget:
             self.current_widget.center_intensity = value
             self.tf_canvas._draw()
-            # AUTO-SYNC to 3D renderer
             self.sync_to_nd()
             self.update_render_view()
 
@@ -532,7 +377,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         if self.current_widget:
             self.current_widget.center_gradient = value
             self.tf_canvas._draw()
-            # AUTO-SYNC to 3D renderer
             self.sync_to_nd()
             self.update_render_view()
 
@@ -540,7 +384,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         if self.current_widget:
             self.current_widget.opacity = value
             self.tf_canvas._draw()
-            # AUTO-SYNC to 3D renderer
             self.sync_to_nd()
             self.update_render_view()
 
@@ -551,7 +394,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
                 self.current_widget.color = (qcolor.redF(), qcolor.greenF(), qcolor.blueF())
                 self.update_color_button()
                 self.tf_canvas._draw()
-                # AUTO-SYNC to 3D renderer
                 self.sync_to_nd()
                 self.update_render_view()
 
@@ -561,7 +403,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             self.color_btn.setStyleSheet(f"background-color: rgb({int(r*255)},{int(g*255)},{int(b*255)});")
 
     def add_widget(self):
-        """Add a new widget"""
         from widget_factory import WidgetFactory, WidgetType
     
         new_widget = WidgetFactory.create_widget(
@@ -574,48 +415,498 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             color=(0.8, 0.2, 0.2)
         )
     
-        # AUTO-SYNC to nd_manager and 3D renderer
         self.nd_manager.add_widget(new_widget)
         self.tf_canvas.add_widget(new_widget)
         self.update_widget_list()
         self.update_render_view()
 
     def delete_selected_widget(self):
-        """Delete selected widget"""
         if hasattr(self, 'current_widget') and self.current_widget:
             self.tf_canvas.remove_widget(self.current_widget)
             self.current_widget = None
             self.update_widget_list()
             self.param_group.setVisible(False)
-            # AUTO-SYNC to 3D renderer
             self.sync_to_nd()
             self.update_render_view()
-            
 
     def clear_all_widgets(self):
-        """Clear all widgets"""
         self.tf_canvas.clear_widgets()
         self.current_widget = None
         self.update_widget_list()
         self.param_group.setVisible(False)
-        # AUTO-SYNC to 3D renderer
         self.sync_to_nd()
         self.update_render_view()
 
     def sync_to_nd(self):
-        """Sync current widgets to nd_manager"""
         self.nd_manager.widgets.clear()
         for widget in self.tf_canvas.widgets:
             self.nd_manager.add_widget(widget)
         self.update_render_view()
-        print(f"✅ Synced {len(self.tf_canvas.widgets)} widgets to nD renderer")
+        print(f"Synced {len(self.tf_canvas.widgets)} widgets to nD renderer")
 
     def load_from_nd(self):
-        """Load widgets from nd_manager"""
         self.tf_canvas.clear_widgets()
         projected = self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
         for widget in projected:
             self.tf_canvas.add_widget(widget)
         self.update_widget_list()
         self.update_render_view()
-        print(f"✅ Loaded {len(projected)} widgets from nD manager")
+        print(f"Loaded {len(projected)} widgets from nD manager")
+
+    def setup_widget_tester(self):
+        """Lägg till widget tester i popupen"""
+        # Hitta middle_layout
+        middle_widget = None
+        for child in self.centralWidget().children():
+            if isinstance(child, QtWidgets.QWidget):
+                for subchild in child.children():
+                    if hasattr(subchild, 'layout') and subchild.layout():
+                        if subchild.layout().count() > 2:
+                            middle_widget = subchild
+                            break
+                if middle_widget:
+                    break
+
+        if not middle_widget:
+            return
+
+        tester_group = QtWidgets.QGroupBox("Widget Performance Test")
+        tester_layout = QtWidgets.QVBoxLayout()
+
+        # Widget type selection
+        type_layout = QtWidgets.QHBoxLayout()
+        type_layout.addWidget(QtWidgets.QLabel("Shape:"))
+        self.test_widget_type = QtWidgets.QComboBox()
+        self.test_widget_type.addItems(['Gaussian', 'Rectangular', 'Triangular', 'Ellipsoid', 'Diamond'])
+        self.test_widget_type.currentTextChanged.connect(self.on_test_shape_changed)
+        type_layout.addWidget(self.test_widget_type)
+        tester_layout.addLayout(type_layout)
+
+        # Position - SYNC med canvas
+        pos_layout = QtWidgets.QHBoxLayout()
+        pos_layout.addWidget(QtWidgets.QLabel("X:"))
+        self.test_x = QtWidgets.QSpinBox()
+        self.test_x.setRange(0, 255)
+        self.test_x.setValue(128)
+        self.test_x.valueChanged.connect(self.on_test_position_changed)
+        pos_layout.addWidget(self.test_x)
+        pos_layout.addWidget(QtWidgets.QLabel("Y:"))
+        self.test_y = QtWidgets.QSpinBox()
+        self.test_y.setRange(0, 255)
+        self.test_y.setValue(128)
+        self.test_y.valueChanged.connect(self.on_test_position_changed)
+        pos_layout.addWidget(self.test_y)
+        tester_layout.addLayout(pos_layout)
+
+        # ===== LÄGG TILL RENDER KONTROLLER =====
+        render_group = QtWidgets.QGroupBox("Display Adjustment")
+        render_layout = QtWidgets.QVBoxLayout()
+    
+        # Opacity boost
+        boost_layout = QtWidgets.QHBoxLayout()
+        boost_layout.addWidget(QtWidgets.QLabel("Opacity Boost:"))
+        self.opacity_boost = QtWidgets.QDoubleSpinBox()
+        self.opacity_boost.setRange(0.5, 2.5)
+        self.opacity_boost.setSingleStep(0.1)
+        self.opacity_boost.setValue(1.0)
+        self.opacity_boost.setToolTip("Multiply overall opacity (1.0 = normal)")
+        self.opacity_boost.valueChanged.connect(self.on_render_settings_changed)
+        boost_layout.addWidget(self.opacity_boost)
+        render_layout.addLayout(boost_layout)
+    
+        # Gamma correction
+        gamma_layout = QtWidgets.QHBoxLayout()
+        gamma_layout.addWidget(QtWidgets.QLabel("Gamma (brightness):"))
+        self.gamma = QtWidgets.QDoubleSpinBox()
+        self.gamma.setRange(0.3, 2.0)
+        self.gamma.setSingleStep(0.1)
+        self.gamma.setValue(1.0)
+        self.gamma.setToolTip("Lower values brighten dark areas")
+        self.gamma.valueChanged.connect(self.on_render_settings_changed)
+        gamma_layout.addWidget(self.gamma)
+        render_layout.addLayout(gamma_layout)
+    
+        render_group.setLayout(render_layout)
+        tester_layout.addWidget(render_group)
+        # =====================================
+
+        # Apply button - uppdaterar nuvarande widget
+        apply_btn = QtWidgets.QPushButton("Apply to Current Widget")
+        apply_btn.clicked.connect(self.apply_test_to_current_widget)
+        tester_layout.addWidget(apply_btn)
+
+        # Test button
+        self.test_btn = QtWidgets.QPushButton("Test This Widget")
+        self.test_btn.clicked.connect(self.test_current_widget)
+        tester_layout.addWidget(self.test_btn)
+
+        # Test all button
+        self.test_all_btn = QtWidgets.QPushButton("Test All Widget Shapes")
+        self.test_all_btn.clicked.connect(self.test_all_widget_shapes)
+        tester_layout.addWidget(self.test_all_btn)
+
+        # Quick browse buttons
+        browse_layout = QtWidgets.QHBoxLayout()
+        prev_btn = QtWidgets.QPushButton("Previous")
+        prev_btn.clicked.connect(self.prev_browse_widget)
+        browse_layout.addWidget(prev_btn)
+
+        self.browse_label = QtWidgets.QLabel("Gaussian")
+        self.browse_label.setAlignment(Qt.AlignCenter)
+        browse_layout.addWidget(self.browse_label)
+
+        next_btn = QtWidgets.QPushButton("Next")
+        next_btn.clicked.connect(self.next_browse_widget)
+        browse_layout.addWidget(next_btn)
+        tester_layout.addLayout(browse_layout)
+
+        # FPS display
+        self.fps_display = QtWidgets.QLabel("FPS: --")
+        self.fps_display.setAlignment(Qt.AlignCenter)
+        self.fps_display.setStyleSheet("font-weight: bold; color: #00ff00;")
+        tester_layout.addWidget(self.fps_display)
+
+        # Screenshot button
+        screenshot_btn = QtWidgets.QPushButton("Take Screenshot")
+        screenshot_btn.clicked.connect(self.take_screenshot)
+        tester_layout.addWidget(screenshot_btn)
+
+        tester_group.setLayout(tester_layout)
+        middle_widget.layout().addWidget(tester_group)
+
+        # Initiera browse
+        self.browse_shapes = ['Gaussian', 'Rectangular', 'Triangular', 'Ellipsoid', 'Diamond']
+        self.browse_index = 0
+
+    def on_render_settings_changed(self):
+        """När render inställningar ändras, applicera direkt"""
+        if hasattr(self, 'mc_renderer') and self.mc_renderer:
+            self.mc_renderer.display_boost = self.opacity_boost.value()
+            self.mc_renderer.display_gamma = self.gamma.value()
+            self.update_render_view()
+            self.fps_display.setText(f"Boost: {self.opacity_boost.value():.1f}, Gamma: {self.gamma.value():.1f}")
+
+    def on_test_shape_changed(self, shape):
+        """När test shape ändras"""
+        self.fps_display.setText(f"Selected: {shape} (click Apply to use)")
+
+    def on_test_position_changed(self):
+        """När test position ändras"""
+        x = self.test_x.value()
+        y = self.test_y.value()
+        self.fps_display.setText(f"Position: ({x},{y})")
+
+    def apply_test_to_current_widget(self):
+        """Applicera test shape och position på nuvarande vald widget"""
+        if hasattr(self, 'current_widget') and self.current_widget:
+            # Uppdatera position
+            self.current_widget.center_intensity = self.test_x.value()
+            self.current_widget.center_gradient = self.test_y.value()
+        
+            # Uppdatera shape - VIKTIGT: skapa en ny widget istället för att försöka ändra typ
+            shape = self.test_widget_type.currentText()
+            x = self.test_x.value()
+            y = self.test_y.value()
+        
+            # Skapa ny widget med rätt shape
+            new_widget = self.create_test_widget(shape, x, y)
+        
+            # Behåll färg och opacitet från gamla widgeten
+            new_widget.color = self.current_widget.color
+            new_widget.opacity = self.current_widget.opacity
+        
+            # Byt ut widgeten i canvas och nd_manager
+            idx = self.tf_canvas.widgets.index(self.current_widget)
+            self.tf_canvas.widgets[idx] = new_widget
+            self.nd_manager.widgets[idx] = new_widget
+        
+            # Uppdatera current_widget referens
+            self.current_widget = new_widget
+            self.tf_canvas.active_widget = idx
+        
+            # Uppdatera canvas
+            self.tf_canvas._draw()
+        
+            # Synca till render
+            self.sync_to_nd()
+            self.update_render_view()
+        
+            # Uppdatera widget list display
+            self.update_widget_list()
+        
+            self.fps_display.setText(f"Updated widget to {shape} at ({x},{y})")
+        else:
+            QtWidgets.QMessageBox.warning(self, "No Widget", "Please select a widget first")
+
+
+
+    def prev_browse_widget(self):
+        """Bläddra till föregående widget shape och applicera direkt"""
+        self.browse_index = (self.browse_index - 1) % len(self.browse_shapes)
+        shape = self.browse_shapes[self.browse_index]
+        self.browse_label.setText(shape)
+        self.test_widget_type.setCurrentText(shape)
+    
+        if hasattr(self, 'current_widget') and self.current_widget:
+            # Skapa ny widget med ny shape
+            x = self.current_widget.center_intensity
+            y = self.current_widget.center_gradient
+            new_widget = self.create_test_widget(shape, x, y)
+        
+            # Behåll färg och opacitet
+            new_widget.color = self.current_widget.color
+            new_widget.opacity = self.current_widget.opacity
+        
+            # Byt ut
+            idx = self.tf_canvas.widgets.index(self.current_widget)
+            self.tf_canvas.widgets[idx] = new_widget
+            self.nd_manager.widgets[idx] = new_widget
+            self.current_widget = new_widget
+            self.tf_canvas.active_widget = idx
+        
+            self.tf_canvas._draw()
+            self.sync_to_nd()
+            self.update_render_view()
+            self.update_widget_list()
+            self.fps_display.setText(f"Changed to {shape}")
+
+    def next_browse_widget(self):
+        """Bläddra till nästa widget shape och applicera direkt"""
+        self.browse_index = (self.browse_index + 1) % len(self.browse_shapes)
+        shape = self.browse_shapes[self.browse_index]
+        self.browse_label.setText(shape)
+        self.test_widget_type.setCurrentText(shape)
+    
+        if hasattr(self, 'current_widget') and self.current_widget:
+            # Skapa ny widget med ny shape
+            x = self.current_widget.center_intensity
+            y = self.current_widget.center_gradient
+            new_widget = self.create_test_widget(shape, x, y)
+        
+            # Behåll färg och opacitet
+            new_widget.color = self.current_widget.color
+            new_widget.opacity = self.current_widget.opacity
+        
+            # Byt ut
+            idx = self.tf_canvas.widgets.index(self.current_widget)
+            self.tf_canvas.widgets[idx] = new_widget
+            self.nd_manager.widgets[idx] = new_widget
+            self.current_widget = new_widget
+            self.tf_canvas.active_widget = idx
+        
+            self.tf_canvas._draw()
+            self.sync_to_nd()
+            self.update_render_view()
+            self.update_widget_list()
+            self.fps_display.setText(f"Changed to {shape}")
+
+    def create_test_widget(self, shape, x, y):
+        from widget_factory import WidgetFactory, WidgetType
+
+        shape_map = {
+            'Gaussian': WidgetType.GAUSSIAN,
+            'Rectangular': WidgetType.RECTANGULAR,
+            'Triangular': WidgetType.TRIANGULAR,
+            'Ellipsoid': WidgetType.ELLIPSOID,
+            'Diamond': WidgetType.DIAMOND
+        }
+
+        base_params = {
+            'center_intensity': x,
+            'center_gradient': y,
+            'opacity': 0.8,
+            'color': (1.0, 1.0, 1.0),
+            'blend_mode': 'max'
+        }
+
+        # Shape-specifika parametrar - ANVÄND RÄTT PARAMETRAR!
+        if shape == 'Gaussian':
+            # Gaussian använder intensity_std och gradient_std
+            params = {**base_params, 'intensity_std': 30, 'gradient_std': 30}
+        elif shape == 'Rectangular':
+            params = {**base_params, 'intensity_width': 60, 'gradient_height': 60}
+        elif shape == 'Triangular':
+            params = {**base_params, 'intensity_width': 60, 'gradient_height': 60, 'direction': 'symmetric'}
+        elif shape == 'Ellipsoid':
+            params = {**base_params, 'intensity_radius': 30, 'gradient_radius': 40}
+        elif shape == 'Diamond':
+            params = {**base_params, 'intensity_width': 60, 'gradient_height': 60}
+        else:
+            params = base_params
+
+        return WidgetFactory.create_widget(shape_map[shape], **params)
+
+    def measure_fps(self):
+        if not hasattr(self, 'mc_renderer') or self.mc_renderer is None:
+            return 0
+    
+        times = []
+        for i in range(30):
+            start = time.perf_counter()
+            self.vtk_widget.GetRenderWindow().Render()
+            end = time.perf_counter()
+            times.append((end - start) * 1000)
+    
+        avg_time = sum(times) / len(times)
+        fps = 1000 / avg_time
+    
+        self.fps_display.setText(f"FPS: {fps:.1f} | {avg_time:.2f}ms")
+        return fps
+
+    def test_current_widget(self):
+        original_widgets = self.nd_manager.widgets.copy()
+    
+        shape = self.test_widget_type.currentText()
+        x = self.test_x.value()
+        y = self.test_y.value()
+        test_widget = self.create_test_widget(shape, x, y)
+    
+        self.nd_manager.widgets.clear()
+        self.nd_manager.add_widget(test_widget)
+        self.load_projected_widgets()
+        self.update_render_view()
+    
+        fps = self.measure_fps()
+    
+        self.nd_manager.widgets = original_widgets
+        self.load_projected_widgets()
+        self.update_render_view()
+    
+        QtWidgets.QMessageBox.information(self, "Test Result", 
+            f"{shape} widget at ({x},{y})\nFPS: {fps:.1f}")
+
+    def test_all_widget_shapes(self):
+        results = {}
+        original_widgets = self.nd_manager.widgets.copy()
+    
+        shapes = ['Gaussian', 'Rectangular', 'Triangular', 'Ellipsoid', 'Diamond']
+        x = self.test_x.value()
+        y = self.test_y.value()
+    
+        for shape in shapes:
+            print(f"\nTesting {shape}...")
+        
+            test_widget = self.create_test_widget(shape, x, y)
+        
+            self.nd_manager.widgets.clear()
+            self.nd_manager.add_widget(test_widget)
+            self.load_projected_widgets()
+            self.update_render_view()
+        
+            times = []
+            for i in range(30):
+                start = time.perf_counter()
+                self.vtk_widget.GetRenderWindow().Render()
+                end = time.perf_counter()
+                times.append((end - start) * 1000)
+        
+            avg_time = sum(times) / len(times)
+            fps = 1000 / avg_time
+            results[shape] = fps
+        
+            print(f"   {shape}: {fps:.1f} FPS ({avg_time:.2f}ms)")
+    
+        self.nd_manager.widgets = original_widgets
+        self.load_projected_widgets()
+        self.update_render_view()
+    
+        msg = "Widget Performance Results:\n\n"
+        for shape, fps in sorted(results.items(), key=lambda x: x[1], reverse=True):
+            msg += f"{shape}: {fps:.1f} FPS\n"
+        msg += f"\nTested at position ({x},{y})"
+        
+        QtWidgets.QMessageBox.information(self, "Performance Results", msg)
+
+    def take_screenshot(self):
+        """Take screenshot of current rendering"""
+        # Skapa screenshots mapp om den inte finns
+        screenshot_dir = "screenshots"
+        if not os.path.exists(screenshot_dir):
+            os.makedirs(screenshot_dir)
+        
+        shape = self.test_widget_type.currentText()
+        x = self.test_x.value()
+        y = self.test_y.value()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(screenshot_dir, f"screenshot_{self.feat_x}_{self.feat_y}_{shape}_{x}_{y}_{timestamp}.png")
+        
+        w2if = vtk.vtkWindowToImageFilter()
+        w2if.SetInput(self.vtk_widget.GetRenderWindow())
+        w2if.Update()
+        
+        writer = vtk.vtkPNGWriter()
+        writer.SetFileName(filename)
+        writer.SetInputConnection(w2if.GetOutputPort())
+        writer.Write()
+        
+        self.fps_display.setText(f"Screenshot: {filename}")
+        print(f"Screenshot saved: {filename}")
+
+    def setup_woodgrain_demo(self):
+        """Add woodgrain artifact demonstration controls"""
+    
+        # Find the tester group
+        tester_group = None
+        for child in self.centralWidget().children():
+            if isinstance(child, QtWidgets.QWidget):
+                for subchild in child.children():
+                    if isinstance(subchild, QtWidgets.QGroupBox) and "Widget Performance Test" in subchild.title():
+                        tester_group = subchild
+                        break
+                if tester_group:
+                    break
+    
+        if not tester_group:
+            return
+    
+        # Add sampling control section
+        sampling_group = QtWidgets.QGroupBox("Woodgrain Artifact Control")
+        sampling_layout = QtWidgets.QVBoxLayout()
+    
+        # Sampling rate slider
+        rate_layout = QtWidgets.QHBoxLayout()
+        rate_layout.addWidget(QtWidgets.QLabel("Sampling Rate:"))
+        self.sampling_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.sampling_slider.setRange(10, 100)
+        self.sampling_slider.setValue(20)  # 2x default (20 = 2.0)
+        self.sampling_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.sampling_slider.valueChanged.connect(self.on_sampling_changed)
+        rate_layout.addWidget(self.sampling_slider)
+    
+        self.sampling_label = QtWidgets.QLabel("2.0x (Nyquist)")
+        rate_layout.addWidget(self.sampling_label)
+        sampling_layout.addLayout(rate_layout)
+    
+        # Pre-integration toggle
+        self.preint_checkbox = QtWidgets.QCheckBox("Use Pre-Integrated Classification (High Quality)")
+        self.preint_checkbox.setChecked(False)
+        self.preint_checkbox.stateChanged.connect(self.on_preintegration_toggled)
+        sampling_layout.addWidget(self.preint_checkbox)
+    
+        # Compare button
+        compare_btn = QtWidgets.QPushButton("Compare: Low vs High Quality")
+        compare_btn.clicked.connect(self.compare_woodgrain_quality)
+        sampling_layout.addWidget(compare_btn)
+    
+        sampling_group.setLayout(sampling_layout)
+        tester_group.layout().addWidget(sampling_group)
+
+    def on_sampling_changed(self, value):
+        """Change sampling rate to show/hide woodgrain artifacts"""
+        rate = value / 10.0
+        self.sampling_label.setText(f"{rate:.1f}x")
+    
+        if hasattr(self, 'mc_renderer') and self.mc_renderer:
+            # Lower sampling = more woodgrain, Higher sampling = smoother
+            self.mc_renderer.set_sampling_rate(rate)
+            self.update_render_view()
+        
+            # Update FPS display
+            self.measure_fps()
+
+    def on_preintegration_toggled(self, state):
+        """Toggle pre-integrated classification"""
+        if hasattr(self, 'mc_renderer') and self.mc_renderer:
+            self.mc_renderer.use_preintegration = (state == Qt.Checked)
+            self.update_render_view()
+            self.measure_fps()
