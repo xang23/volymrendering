@@ -237,6 +237,15 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
     
         self.nd_manager.update_nd_position(widget_2d, new_x, new_y, feat_x, feat_y)
         self.update_widget_list()
+
+        # Uppdatera test panelens positioner
+        self.test_x.blockSignals(True)
+        self.test_y.blockSignals(True)
+        self.test_x.setValue(int(new_x))
+        self.test_y.setValue(int(new_y))
+        self.test_x.blockSignals(False)
+        self.test_y.blockSignals(False)
+        # ================================
         self.sync_to_nd()
     
     def update_render_view(self):
@@ -310,12 +319,18 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.tf_canvas._draw()
         
         # SYNC: Uppdatera test panel med denna widgets info
+        self.test_x.blockSignals(True)
+        self.test_y.blockSignals(True)
         self.test_x.setValue(int(self.current_widget.center_intensity))
         self.test_y.setValue(int(self.current_widget.center_gradient))
-        
+        self.test_x.blockSignals(False)
+        self.test_y.blockSignals(False)
+    
         # Identifiera shape
         shape = self.identify_widget_shape(self.current_widget)
+        self.test_widget_type.blockSignals(True)
         self.test_widget_type.setCurrentText(shape)
+        self.test_widget_type.blockSignals(False)
         self.browse_label.setText(shape)
         
         self.update_parameter_controls()
@@ -406,20 +421,20 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
     def add_widget(self):
         from widget_factory import WidgetFactory, WidgetType
     
-        new_widget = WidgetFactory.create_widget(
-            WidgetType.GAUSSIAN,
-            center_intensity=128,
-            center_gradient=128,
-            intensity_std=25,
-            gradient_std=25,
-            opacity=0.8,
-            color=(0.8, 0.2, 0.2)
-        )
+        # Använd test widget creation för att få rätt shape och nd_ref
+        shape = self.test_widget_type.currentText()
+        x = self.test_x.value()
+        y = self.test_y.value()
+    
+        new_widget = self.create_test_widget(shape, x, y)
+        # create_test_widget lägger redan till nd_ref = True
     
         self.nd_manager.add_widget(new_widget)
         self.tf_canvas.add_widget(new_widget)
         self.update_widget_list()
         self.update_render_view()
+    
+        print(f"Added {shape} widget at ({x},{y}) with nd_ref=True")
 
     def delete_selected_widget(self):
         if hasattr(self, 'current_widget') and self.current_widget:
@@ -442,7 +457,10 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.nd_manager.widgets.clear()
         for widget in self.tf_canvas.widgets:
             self.nd_manager.add_widget(widget)
-        self.update_render_view()
+        # Tvinga fram rendering
+        if hasattr(self, 'mc_renderer'):
+            self.mc_renderer.set_feature_pair(self.feat_x, self.feat_y)
+            self.vtk_widget.GetRenderWindow().Render()
         print(f"Synced {len(self.tf_canvas.widgets)} widgets to nD renderer")
 
     def load_from_nd(self):
@@ -735,7 +753,10 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         else:
             params = base_params
 
-        return WidgetFactory.create_widget(shape_map[shape], **params)
+        widget = WidgetFactory.create_widget(shape_map[shape], **params)
+        widget.nd_ref = True
+
+        return widget
 
     def measure_fps(self):
         if not hasattr(self, 'mc_renderer') or self.mc_renderer is None:
