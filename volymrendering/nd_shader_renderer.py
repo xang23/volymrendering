@@ -1,6 +1,7 @@
 ﻿import vtk
 import numpy as np
 from vtk.util import numpy_support
+import traceback
 
 class NDShaderRenderer:
     def __init__(self, image_data, feature_names, nd_manager, renderer_id="default"):
@@ -15,6 +16,8 @@ class NDShaderRenderer:
             self.display_boost = 1.0      # Opacity boost
             self.display_gamma = 1.0      # Gamma correction
             # ====================================================
+            # Sampling kontroller
+            self.sampling_rate = 2.0       # Default Nyquist rate (2 samples/voxel)
 
             print(f"\n🔧 Initializing NDShaderRenderer: {renderer_id}")
             print(f"   Features: {feature_names}")
@@ -140,6 +143,16 @@ class NDShaderRenderer:
             import traceback
             traceback.print_exc()
             raise
+
+    def set_sampling_rate(self, rate):
+        """Set sampling rate to combat woodgrain artifacts"""
+        self.sampling_rate = max(0.5, min(8.0, rate))
+    
+        # Adjust sample distance in the volume mapper
+        if hasattr(self, 'current_volume'):
+            mapper = self.current_volume.GetMapper()
+            mapper.SetSampleDistance(1.0 / self.sampling_rate)
+            print(f"   Sampling rate set to {self.sampling_rate}x (distance: {1.0/self.sampling_rate:.3f})")
 
     def add_bounding_box(self, dims):
         bounds = [0, dims[0], 0, dims[1], 0, dims[2]]
@@ -433,6 +446,9 @@ class NDShaderRenderer:
 
             final_mapper = vtk.vtkGPUVolumeRayCastMapper()
             final_mapper.SetInputData(final_volume)
+            final_mapper.SetSampleDistance(1.0 / self.sampling_rate)
+            final_mapper.SetAutoAdjustSampleDistances(False)  # <-- KRITISKT!
+            print(f"   Sampling rate: {self.sampling_rate}x (distance: {1.0/self.sampling_rate:.3f})")
 
             final_volume_obj = vtk.vtkVolume()
             final_volume_obj.SetMapper(final_mapper)

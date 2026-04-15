@@ -209,6 +209,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         
         # Setup widget tester
         self.setup_widget_tester()
+        self.setup_woodgrain_demo()
 
     def force_real_red(self):
         if hasattr(self, 'mc_renderer') and self.mc_renderer:
@@ -890,6 +891,57 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
     
         sampling_group.setLayout(sampling_layout)
         tester_group.layout().addWidget(sampling_group)
+
+    def compare_woodgrain_quality(self):
+        """Compare low vs high sampling quality"""
+        if not hasattr(self, 'mc_renderer') or self.mc_renderer is None:
+            QtWidgets.QMessageBox.warning(self, "Error", "No renderer available")
+            return
+    
+        # Spara nuvarande widget och inställningar
+        original_shape = self.test_widget_type.currentText()
+        original_sampling = self.sampling_slider.value()
+    
+        # Använd en skarp widget för att maximera woodgrain effekten
+        self.test_widget_type.setCurrentText('Rectangular')
+        self.apply_test_to_current_widget()
+    
+        results = []
+    
+        # Test 1: Låg sampling (visar woodgrain)
+        self.sampling_slider.setValue(10)  # 1.0x
+        QtWidgets.QApplication.processEvents()
+        time.sleep(0.5)
+        self.take_screenshot()
+        results.append("1.0x sampling (woodgrain visible)")
+    
+        # Test 2: Nyquist sampling (minimum för anti-aliasing)
+        self.sampling_slider.setValue(20)  # 2.0x
+        QtWidgets.QApplication.processEvents()
+        time.sleep(0.5)
+        self.take_screenshot()
+        results.append("2.0x sampling (Nyquist)")
+    
+        # Test 3: Hög sampling (slät)
+        self.sampling_slider.setValue(40)  # 4.0x
+        QtWidgets.QApplication.processEvents()
+        time.sleep(0.5)
+        self.take_screenshot()
+        results.append("4.0x sampling (smooth)")
+    
+        # Återställ original inställningar
+        self.test_widget_type.setCurrentText(original_shape)
+        self.apply_test_to_current_widget()
+        self.sampling_slider.setValue(original_sampling)
+    
+        msg = "Woodgrain Artifact Comparison:\n\n"
+        msg += "Lower sampling = more woodgrain artifacts\n"
+        msg += "Higher sampling = smoother surfaces but lower FPS\n\n"
+        for r in results:
+            msg += f"- {r}\n"
+        msg += "\nScreenshots saved in 'screenshots' folder"
+    
+        QtWidgets.QMessageBox.information(self, "Woodgrain Demo", msg)
 
     def on_sampling_changed(self, value):
         """Change sampling rate to show/hide woodgrain artifacts"""
