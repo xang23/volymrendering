@@ -123,8 +123,12 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
         canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
         
-        data = self.feature_data[feature_name]
-        hist, bins = np.histogram(data, bins=30)
+        raw = self.feature_data[feature_name]
+        if feature_name.lower() == "laplacian":
+            data = self.normalize_signed_to_255(raw)
+        else:
+            data = self.normalize_to_255(raw)
+        hist, bins = np.histogram(data, bins=30, range=(0, 255))
         ax.fill_between(bins[:-1], hist, color='#3498db', alpha=0.7)
         ax.set_xticks([])
         ax.set_yticks([])
@@ -152,8 +156,20 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
         canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
         
-        data_x = self.feature_data[feat_x]
-        data_y = self.feature_data[feat_y]
+        raw_x = self.feature_data[feat_x]
+        raw_y = self.feature_data[feat_y]
+
+        # Normalize X feature
+        if feat_x.lower() == "laplacian":
+            data_x = self.normalize_signed_to_255(raw_x)
+        else:
+            data_x = self.normalize_to_255(raw_x)
+
+        # Normalize Y feature
+        if feat_y.lower() == "laplacian":
+            data_y = self.normalize_signed_to_255(raw_y)
+        else:
+            data_y = self.normalize_to_255(raw_y)
         
         # Sample for performance
         if len(data_x) > 1000:
@@ -162,6 +178,8 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
             data_y = data_y[indices]
             
         ax.scatter(data_x, data_y, s=1, alpha=0.6, color='#e67e22')
+        ax.set_xlim(0, 255)
+        ax.set_ylim(0, 255)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.spines['top'].set_visible(False)
@@ -214,3 +232,22 @@ class SimpleMatrixBrowser(QtWidgets.QWidget):
         
         # Create new matrix
         self.setup_ui()
+
+    def normalize_to_255(self, data):
+        data = np.asarray(data, dtype=np.float32)
+        mn = np.min(data)
+        mx = np.max(data)
+
+        if mx <= mn:
+            return np.zeros_like(data, dtype=np.float32)
+
+        return 255.0 * (data - mn) / (mx - mn)
+
+    def normalize_signed_to_255(self, data):
+        data = np.asarray(data, dtype=np.float32)
+        m = max(abs(float(np.min(data))), abs(float(np.max(data))))
+
+        if m <= 1e-8:
+            return np.zeros_like(data, dtype=np.float32) + 127.5
+
+        return 127.5 + 127.5 * (data / m)

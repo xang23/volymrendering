@@ -52,14 +52,15 @@ class NDWidgetManager:
             widget.nd_scales['Intensity'] = widget.intensity_std
         if hasattr(widget, 'gradient_std'):
             widget.nd_scales['Gradient'] = widget.gradient_std
-        
-        # Set defaults for any other features
+    
+        # ===== LÄGG TILL DETTA: Sätt default skalor för alla features =====
         for feat in self.feature_names:
             if feat not in widget.nd_coords:
                 widget.nd_coords[feat] = 128
             if feat not in widget.nd_scales:
-                widget.nd_scales[feat] = 30
-        
+                widget.nd_scales[feat] = 30  # Default scale (3 sigma = 90, reasonable)
+        # ================================================================
+    
         self.widgets.append(widget)
         return widget
     
@@ -124,6 +125,7 @@ class NDWidgetManager:
         if feature_x is not None and feature_y is not None:
             # Update the specified features
             widget.nd_coords[feature_x] = x
+            widget.nd_coords[feature_y] = y
             widget.nd_coords[feature_y] = y
             print(f"   Updated nd_coords: {feature_x}={x:.1f}, {feature_y}={y:.1f}")
         else:

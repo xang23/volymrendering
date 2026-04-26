@@ -1,4 +1,7 @@
-﻿import sys
+﻿#from vispy import app
+#app.use_app('pyqt5')  # Tvinga Vispy att använda PyQt5 som backend
+
+import sys
 import numpy as np
 import vtk
 # WidgetTF
@@ -9,6 +12,8 @@ from widget_manager_ui import WidgetManager
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import Qt
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from PyQt5.QtGui import QSurfaceFormat
+from gl_true2d_widget import GLTrue2DTestWidget
 
 # Import our modular components
 from dataset_loader import DatasetLoader
@@ -18,6 +23,7 @@ from transfer_function_2d import TransferFunction2D
 from volume_renderer import VolumeRenderer
 from tf_canvas_widget import TFCanvasWidget
 
+import traceback
 import os
 import glob
 
@@ -298,6 +304,10 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.save_tf_btn = QtWidgets.QPushButton("Save TF")
         self.save_tf_btn.clicked.connect(self.save_current_tf)
         self.toolbar.addWidget(self.save_tf_btn)
+
+        self.true2d_debug_btn = QtWidgets.QPushButton("TRUE 2D Debug")
+        self.true2d_debug_btn.clicked.connect(self.open_true2d_debug_test)
+        self.toolbar.addWidget(self.true2d_debug_btn)
 
         return self.toolbar
 
@@ -1029,8 +1039,91 @@ class VolumeApp(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Error", 
                 f"Could not open Artifact Analyzer:\n{str(e)}")
 
+    def open_true2d_debug_test(self):
+        print("\n" + "=" * 70)
+        print("OPENING TRUE 2D OPENGL DEBUG TEST")
+        print("=" * 70)
+
+        def make_test_widgets():
+            widgets = []
+
+            widgets.append(
+                WidgetFactory.create_widget(
+                    WidgetType.GAUSSIAN,
+                    center_intensity=128,
+                    center_gradient=128,
+                    intensity_std=22,
+                    gradient_std=22,
+                    opacity=1.0,
+                    color=(1.0, 0.1, 0.1),
+                    blend_mode="max",
+                )
+            )
+
+            widgets.append(
+                WidgetFactory.create_widget(
+                    WidgetType.GAUSSIAN,
+                    center_intensity=70,
+                    center_gradient=190,
+                    intensity_std=18,
+                    gradient_std=18,
+                    opacity=0.9,
+                    color=(0.1, 1.0, 0.1),
+                    blend_mode="max",
+                )
+            )
+
+            widgets.append(
+                WidgetFactory.create_widget(
+                    WidgetType.RECTANGULAR,
+                    center_intensity=190,
+                    center_gradient=70,
+                    intensity_width=45,
+                    gradient_height=45,
+                    falloff=4.0,
+                    opacity=0.8,
+                    color=(0.1, 0.2, 1.0),
+                    blend_mode="max",
+                )
+            )
+
+            return widgets
+
+        self.true2d_debug_window = QtWidgets.QMainWindow(self)
+        self.true2d_debug_window.setWindowTitle("TRUE 2D TF OpenGL Debug Test")
+        self.true2d_debug_window.resize(1000, 800)
+
+        central = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(central)
+
+        instructions = QtWidgets.QLabel(
+            "<b>True 2D Transfer Function Debug Test</b><br>"
+            "Keys: 0=True 2D TF, 1=Feature X, 2=Feature Y, "
+            "3=Joint feature color, R=Force red, +/-=Sampling<br><br>"
+            "<b>Expected:</b> 1 shows feature X, 2 shows feature Y, "
+            "3 shows joint feature coordinates, 0 shows the real 2D TF texture lookup."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        self.true2d_debug_gl = GLTrue2DTestWidget(make_test_widgets())
+        layout.addWidget(self.true2d_debug_gl, 1)
+
+        self.true2d_debug_window.setCentralWidget(central)
+        self.true2d_debug_window.show()
+        self.true2d_debug_window.raise_()
+        self.true2d_debug_window.activateWindow()
+
+        print("TRUE 2D debug window opened.")
+
 # --------------------------- Main ---------------------------
 if __name__ == "__main__":
+    fmt = QSurfaceFormat()
+    fmt.setVersion(3, 3)
+    fmt.setProfile(QSurfaceFormat.CoreProfile)
+    fmt.setDepthBufferSize(24)
+    QSurfaceFormat.setDefaultFormat(fmt)
+
     app = QtWidgets.QApplication(sys.argv)
     window = VolumeApp()
     window.show()

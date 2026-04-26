@@ -3,8 +3,11 @@ from PyQt5 import QtWidgets
 from PyQt5.QtCore import Qt
 from unified_tf_canvas import UnifiedTFCanvas
 from tf_canvas_widget import TFCanvasWidget
-from nd_shader_renderer import NDShaderRenderer
-from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from PyQt5 import QtGui
+from tf_texture_builder_debug import build_tf_texture_2d_debug
+#from nd_shader_renderer import NDShaderRenderer
+#from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from gl_nd_volume_widget import GLNDVolumeWidget
 import numpy as np
 import time
 import vtk
@@ -30,6 +33,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             name = point_data.GetArrayName(i)
             if name:
                 self.feature_names.append(name)
+
     
         print(f"Actual features in point data: {self.feature_names}")
         
@@ -43,7 +47,14 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.x_range = (float(np.min(data_x)), float(np.max(data_x)))
         self.y_range = (float(np.min(data_y)), float(np.max(data_y)))
 
+        #Mc_render creation
         self.setup_ui(data_x, data_y)
+        # ===== SÄTT FEATURE-PAIR EFTER att renderern har skapats =====
+        if hasattr(self, 'mc_renderer') and self.mc_renderer:
+            self.mc_renderer.current_x_feature = self.feat_x
+            self.mc_renderer.current_y_feature = self.feat_y
+            print(f"   ✅ Set renderer feature pair to: {self.feat_x} vs {self.feat_y}")
+        # ===========================================================
         self.load_projected_widgets()
         self.update_render_view()
 
@@ -51,7 +62,41 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         data_min, data_max = np.min(data), np.max(data)
         if data_max > data_min:
             return 255.0 * (data - data_min) / (data_max - data_min)
+
         return np.zeros_like(data)
+
+    def update_tf_texture_preview(self):
+        if not hasattr(self, "tf_preview_label"):
+            return
+
+        widgets = self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
+        tf = build_tf_texture_2d_debug(widgets, size=256, verbose=False) #Change to True for debug
+
+        img = np.clip(tf * 255.0, 0, 255).astype(np.uint8)
+
+        # Use alpha as visible brightness where RGB is black/transparent.
+        alpha = img[:, :, 3:4]
+        rgb = img[:, :, :3]
+        preview = np.maximum(rgb, alpha)
+
+        h, w, _ = preview.shape
+        qimg = QtGui.QImage(
+            preview.data,
+            w,
+            h,
+            3 * w,
+            QtGui.QImage.Format_RGB888,
+        ).copy()
+
+        pixmap = QtGui.QPixmap.fromImage(qimg)
+        pixmap = pixmap.scaled(
+            180,
+            180,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+
+        self.tf_preview_label.setPixmap(pixmap)
     
     def setup_ui(self, data_x, data_y):
         central = QtWidgets.QWidget()
@@ -154,59 +199,66 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         force_btn.clicked.connect(self.force_real_red)
         middle_layout.addWidget(force_btn)
 
+        # ===== TF TEXTURE DISPLAY (DEBUG) =====
+        separator = QtWidgets.QFrame()
+        separator.setFrameShape(QtWidgets.QFrame.HLine)
+        middle_layout.addWidget(separator)
+    
+        texture_label = QtWidgets.QLabel("<b>2D TF Texture (Debug)</b>")
+        texture_label.setAlignment(Qt.AlignCenter)
+        middle_layout.addWidget(texture_label)
+    
+        self.texture_display = TFTextureDisplay(self, width=4, height=4)
+        middle_layout.addWidget(self.texture_display)
+    
+        refresh_btn = QtWidgets.QPushButton("Refresh Texture")
+        refresh_btn.clicked.connect(self.refresh_texture_display)
+        middle_layout.addWidget(refresh_btn)
+
         middle_layout.addStretch()
         main_layout.addWidget(middle_widget, 1)
 
-        # RIGHT: ND Shader Render View
+
+       # ===== RIGHT: TRUE 2D OPENGL RENDER VIEW =====
         right_widget = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_widget)
 
-        render_title = QtWidgets.QLabel(f"<h3>Live Rendering: {self.feat_x} (color) vs {self.feat_y} (opacity)</h3>")
+        render_title = QtWidgets.QLabel(
+            f"<h3>True 2D OpenGL Rendering: {self.feat_x} vs {self.feat_y}</h3>"
+        )
         render_title.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(render_title)
+        self.tf_preview_label = QtWidgets.QLabel()
+        self.tf_preview_label.setFixedHeight(180)
+        self.tf_preview_label.setAlignment(Qt.AlignCenter)
+        right_layout.addWidget(self.tf_preview_label)
 
-        self.vtk_widget = QVTKRenderWindowInteractor()
+        from gl_nd_volume_widget import GLNDVolumeWidget
 
-        # CREATE RENDERER
+        self.gl_widget = GLNDVolumeWidget()
+        right_layout.addWidget(self.gl_widget)
+
         try:
-            print(f"\nCreating NDShaderRenderer for popup...")
-            self.mc_renderer = NDShaderRenderer(
-                self.image_data,
-                self.feature_names,
-                self.nd_manager,
-                f"popup_{self.feat_x}_{self.feat_y}"
-            )
-            print(f"NDShaderRenderer created successfully")
-            
-            print(f"Adding renderer to VTK widget...")
-            ren_win = self.vtk_widget.GetRenderWindow()
-            ren_win.AddRenderer(self.mc_renderer.get_renderer())
-            print(f"Renderer added to VTK widget")
-            
-            right_layout.addWidget(self.vtk_widget)
-            print(f"VTK widget added to layout")
-            
-            self.vtk_widget.show()
-            self.vtk_widget.Initialize()
+            projected_widgets = self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
 
-            # Test simple render first
-            print(f"\nApplying widget-based TF for {self.feat_x} vs {self.feat_y}...")
-            self.mc_renderer.set_feature_pair(self.feat_x, self.feat_y)
-            ren_win.Render()
-            print(f"Widget-based render complete")
-            
+            self.gl_widget.set_volume_data(
+                dims=self.image_data.GetDimensions(),
+                all_features=self.all_features,
+                feature_x=self.feat_x,
+                feature_y=self.feat_y,
+                widgets=projected_widgets,
+            )
+
+            print(
+                f"✅ True 2D OpenGL renderer initialized for "
+                f"{self.feat_x} vs {self.feat_y}"
+            )
+
         except Exception as e:
-            print(f"CRASH in renderer creation: {e}")
+            print(f"❌ Error creating True 2D OpenGL renderer: {e}")
             traceback.print_exc()
-            self.mc_renderer = None
-            error_label = QtWidgets.QLabel(f"Render error: {str(e)}")
-            error_label.setStyleSheet("color: red; font-size: 14px;")
-            right_layout.addWidget(error_label)
-            right_layout.addWidget(self.vtk_widget)
-            self.vtk_widget.show()
 
         main_layout.addWidget(right_widget, 2)
-        
+
         # Setup widget tester
         self.setup_widget_tester()
         self.setup_woodgrain_demo()
@@ -250,8 +302,18 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
     
     def update_render_view(self):
         print(f"Updating render view for {self.feat_x} vs {self.feat_y}")
+        if not hasattr(self, "gl_widget"):
+            return
 
-        if not hasattr(self, 'mc_renderer') or self.mc_renderer is None:
+        widgets = self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
+
+        self.gl_widget.set_feature_pair(
+            self.feat_x,
+            self.feat_y,
+            widgets,
+        )
+        self.update_tf_texture_preview()
+        """if not hasattr(self, 'mc_renderer') or self.mc_renderer is None:
             print(f"   No renderer available")
             return
 
@@ -259,41 +321,17 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             all_widgets = self.nd_manager.widgets
             print(f"   Got {len(all_widgets)} widgets from nd_manager")
         
-            intensities = []
-            opacities = []
-            colors = []
-            gradient_values = []
-            gradient_opacities = []
-        
-            for widget in all_widgets:
-                x_val = widget.nd_coords.get(self.feat_x, 128)
-                y_val = widget.nd_coords.get(self.feat_y, 128)
-            
-                intensities.append(x_val)
-                opacities.append(widget.opacity)
-                colors.append(widget.color)
-                gradient_values.append(y_val)
-                gradient_opacities.append(widget.opacity)
-        
-            print(f"   Built TF with {len(intensities)} widgets")
-        
-            if intensities:
-                self.mc_renderer.update_transfer_functions(
-                    intensities, opacities, colors,
-                    self.x_range, gradient_values, gradient_opacities, self.y_range
-                )
-            else:
-                self.mc_renderer.update_transfer_functions(
-                    [0, 255], [0, 0], [(0.5, 0.5, 0.5)], self.x_range
-                )
-        
+            # Uppdatera renderern (Vispy versionen hanterar allt internt)
             self.mc_renderer.set_feature_pair(self.feat_x, self.feat_y)
-            self.vtk_widget.GetRenderWindow().Render()
-            print(f"   Render updated with {len(intensities)} active widgets")
+        
+            # Uppdatera texture display (oförändrad)
+            self.refresh_texture_display()
+        
+            print(f"   Render updated with {len(all_widgets)} active widgets")
     
         except Exception as e:
             print(f"   Error in update_render_view: {e}")
-            traceback.print_exc()
+            traceback.print_exc()"""
     
     def closeEvent(self, event):
         if hasattr(self, 'vtk_widget'):
@@ -350,37 +388,116 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         return 'Gaussian'
 
     def update_parameter_controls(self):
+        # Clear old controls
         for i in reversed(range(self.param_layout.count())):
-            self.param_layout.itemAt(i).widget().setParent(None)
-    
-        if not self.current_widget:
+            item = self.param_layout.itemAt(i)
+            if item and item.widget():
+                item.widget().setParent(None)
+
+        if not hasattr(self, "current_widget") or self.current_widget is None:
             return
-    
+
+        widget = self.current_widget
+
+        # ---------- Position ----------
         self.x_spin = QtWidgets.QDoubleSpinBox()
         self.x_spin.setRange(0, 255)
-        self.x_spin.setValue(self.current_widget.center_intensity)
+        self.x_spin.setSingleStep(1)
+        self.x_spin.setValue(float(widget.center_intensity))
         self.x_spin.valueChanged.connect(self.on_x_changed)
         self.param_layout.addRow("X Position:", self.x_spin)
-    
+
         self.y_spin = QtWidgets.QDoubleSpinBox()
         self.y_spin.setRange(0, 255)
-        self.y_spin.setValue(self.current_widget.center_gradient)
+        self.y_spin.setSingleStep(1)
+        self.y_spin.setValue(float(widget.center_gradient))
         self.y_spin.valueChanged.connect(self.on_y_changed)
         self.param_layout.addRow("Y Position:", self.y_spin)
-    
+
+        # ---------- Opacity ----------
         self.opacity_spin = QtWidgets.QDoubleSpinBox()
-        self.opacity_spin.setRange(0, 1)
+        self.opacity_spin.setRange(0.0, 1.0)
         self.opacity_spin.setSingleStep(0.05)
-        self.opacity_spin.setValue(self.current_widget.opacity)
+        self.opacity_spin.setValue(float(widget.opacity))
         self.opacity_spin.valueChanged.connect(self.on_opacity_changed)
         self.param_layout.addRow("Opacity:", self.opacity_spin)
-    
+
+        # ---------- Shape-specific size controls ----------
+        self.size_spins = {}
+
+        def add_size_control(label, attr, min_val=1, max_val=200, step=1):
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setValue(float(getattr(widget, attr)))
+            spin.valueChanged.connect(lambda value, a=attr: self.on_widget_param_changed(a, value))
+            self.param_layout.addRow(label, spin)
+            self.size_spins[attr] = spin
+
+        if hasattr(widget, "intensity_std"):
+            add_size_control("Intensity Std:", "intensity_std", 1, 150, 1)
+            add_size_control("Gradient Std:", "gradient_std", 1, 150, 1)
+
+        if hasattr(widget, "intensity_width"):
+            add_size_control("Intensity Width:", "intensity_width", 1, 255, 1)
+
+        if hasattr(widget, "gradient_height"):
+            add_size_control("Gradient Height:", "gradient_height", 1, 255, 1)
+
+        if hasattr(widget, "intensity_radius"):
+            add_size_control("Intensity Radius:", "intensity_radius", 1, 150, 1)
+
+        if hasattr(widget, "gradient_radius"):
+            add_size_control("Gradient Radius:", "gradient_radius", 1, 150, 1)
+
+        if hasattr(widget, "falloff"):
+            add_size_control("Falloff:", "falloff", 0, 80, 1)
+
+        if hasattr(widget, "falloff_power"):
+            add_size_control("Falloff Power:", "falloff_power", 0.1, 5.0, 0.1)
+
+        # ---------- Triangular direction ----------
+        if hasattr(widget, "direction"):
+            self.direction_combo = QtWidgets.QComboBox()
+            self.direction_combo.addItems(["up", "down", "symmetric"])
+            self.direction_combo.setCurrentText(widget.direction)
+            self.direction_combo.currentTextChanged.connect(self.on_direction_changed)
+            self.param_layout.addRow("Direction:", self.direction_combo)
+
+        # ---------- Color ----------
         self.color_btn = QtWidgets.QPushButton("Change Color")
         self.color_btn.clicked.connect(self.change_color)
         self.param_layout.addRow("Color:", self.color_btn)
         self.update_color_button()
-    
+
         self.param_group.setVisible(True)
+
+    def on_widget_param_changed(self, attr, value):
+        if not hasattr(self, "current_widget") or self.current_widget is None:
+            return
+
+        setattr(self.current_widget, attr, value)
+
+        print(f"Updated widget parameter: {attr} = {value}")
+
+        self.tf_canvas._draw()
+        self.sync_to_nd()
+        self.update_widget_list()
+        self.update_render_view()
+
+
+    def on_direction_changed(self, direction):
+        if not hasattr(self, "current_widget") or self.current_widget is None:
+            return
+
+        self.current_widget.direction = direction
+
+        print(f"Updated widget direction: {direction}")
+
+        self.tf_canvas._draw()
+        self.sync_to_nd()
+        self.update_widget_list()
+        self.update_render_view()
 
     def on_x_changed(self, value):
         if self.current_widget:
@@ -426,7 +543,9 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         x = self.test_x.value()
         y = self.test_y.value()
     
-        new_widget = self.create_test_widget(shape, x, y)
+        falloff = self.falloff_type.currentText() if hasattr(self, 'falloff_type') else 'linear'
+    
+        new_widget = self.create_test_widget(shape, x, y, falloff)
         # create_test_widget lägger redan till nd_ref = True
     
         self.nd_manager.add_widget(new_widget)
@@ -434,7 +553,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.update_widget_list()
         self.update_render_view()
     
-        print(f"Added {shape} widget at ({x},{y}) with nd_ref=True")
+        print(f"Added {shape} widget at ({x},{y}) with nd_ref=True with falloff={falloff}")
 
     def delete_selected_widget(self):
         if hasattr(self, 'current_widget') and self.current_widget:
@@ -457,11 +576,13 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.nd_manager.widgets.clear()
         for widget in self.tf_canvas.widgets:
             self.nd_manager.add_widget(widget)
-        # Tvinga fram rendering
-        if hasattr(self, 'mc_renderer'):
-            self.mc_renderer.set_feature_pair(self.feat_x, self.feat_y)
-            self.vtk_widget.GetRenderWindow().Render()
-        print(f"Synced {len(self.tf_canvas.widgets)} widgets to nD renderer")
+        self.update_render_view()
+        # Använd Vispy renderer istället för VTK
+        #if hasattr(self, 'mc_renderer') and self.mc_renderer:
+         #   self.mc_renderer.set_feature_pair(self.feat_x, self.feat_y)
+          #  print(f"Synced {len(self.tf_canvas.widgets)} widgets to Vispy renderer")
+        #else:
+           # print(f"⚠️ No renderer available for sync")
 
     def load_from_nd(self):
         self.tf_canvas.clear_widgets()
@@ -597,6 +718,20 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.browse_shapes = ['Gaussian', 'Rectangular', 'Triangular', 'Ellipsoid', 'Diamond']
         self.browse_index = 0
 
+        # Falloff type selection
+        falloff_layout = QtWidgets.QHBoxLayout()
+        falloff_layout.addWidget(QtWidgets.QLabel("Falloff:"))
+        self.falloff_type = QtWidgets.QComboBox()
+        self.falloff_type.addItems(['gaussian', 'linear', 'constant', 'power2', 'power3'])
+        self.falloff_type.setCurrentText('gaussian')
+        self.falloff_type.currentTextChanged.connect(self.on_falloff_changed)
+        falloff_layout.addWidget(self.falloff_type)
+        tester_layout.addLayout(falloff_layout)
+
+    def on_falloff_changed(self, falloff_type):
+        """När falloff typ ändras"""
+        self.fps_display.setText(f"Falloff: {falloff_type} (click Apply to use)")
+
     def on_render_settings_changed(self):
         """När render inställningar ändras, applicera direkt"""
         if hasattr(self, 'mc_renderer') and self.mc_renderer:
@@ -626,9 +761,10 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             shape = self.test_widget_type.currentText()
             x = self.test_x.value()
             y = self.test_y.value()
+            falloff = self.falloff_type.currentText() if hasattr(self, 'falloff_type') else 'linear'
         
             # Skapa ny widget med rätt shape
-            new_widget = self.create_test_widget(shape, x, y)
+            new_widget = self.create_test_widget(shape, x, y, falloff)
         
             # Behåll färg och opacitet från gamla widgeten
             new_widget.color = self.current_widget.color
@@ -670,7 +806,11 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             # Skapa ny widget med ny shape
             x = self.current_widget.center_intensity
             y = self.current_widget.center_gradient
-            new_widget = self.create_test_widget(shape, x, y)
+            color = self.current_widget.color
+            opacity = self.current_widget.opacity
+            falloff = self.falloff_type.currentText() if hasattr(self, 'falloff_type') else 'linear'
+        
+            new_widget = self.create_test_widget(shape, x, y, falloff)
         
             # Behåll färg och opacitet
             new_widget.color = self.current_widget.color
@@ -700,7 +840,11 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             # Skapa ny widget med ny shape
             x = self.current_widget.center_intensity
             y = self.current_widget.center_gradient
-            new_widget = self.create_test_widget(shape, x, y)
+            color = self.current_widget.color
+            opacity = self.current_widget.opacity
+            falloff = self.falloff_type.currentText() if hasattr(self, 'falloff_type') else 'linear'
+        
+            new_widget = self.create_test_widget(shape, x, y, falloff)
         
             # Behåll färg och opacitet
             new_widget.color = self.current_widget.color
@@ -719,7 +863,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             self.update_widget_list()
             self.fps_display.setText(f"Changed to {shape}")
 
-    def create_test_widget(self, shape, x, y):
+    def create_test_widget(self, shape, x, y, falloff_type=None):
         from widget_factory import WidgetFactory, WidgetType
 
         shape_map = {
@@ -730,32 +874,40 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             'Diamond': WidgetType.DIAMOND
         }
 
+        # Om falloff_type inte anges, använd från combo box eller default
+        if falloff_type is None:
+            if hasattr(self, 'falloff_type'):
+                falloff_type = self.falloff_type.currentText()
+            else:
+                falloff_type = 'linear'  # Default
+
         base_params = {
             'center_intensity': x,
             'center_gradient': y,
             'opacity': 0.8,
             'color': (1.0, 1.0, 1.0),
-            'blend_mode': 'max'
+            'blend_mode': 'max',
+            'falloff_type': falloff_type
         }
 
-        # Shape-specifika parametrar - ANVÄND RÄTT PARAMETRAR!
         if shape == 'Gaussian':
-            # Gaussian använder intensity_std och gradient_std
-            params = {**base_params, 'intensity_std': 30, 'gradient_std': 30}
+            params = {**base_params, 'intensity_std': 12, 'gradient_std': 12, 'falloff_type': 'gaussian'}
         elif shape == 'Rectangular':
-            params = {**base_params, 'intensity_width': 60, 'gradient_height': 60}
+            params = {**base_params, 'intensity_width': 30, 'gradient_height': 30, 'falloff': 0, 'falloff_type': 'constant'}
         elif shape == 'Triangular':
-            params = {**base_params, 'intensity_width': 60, 'gradient_height': 60, 'direction': 'symmetric'}
+            params = {**base_params, 'intensity_width': 35, 'gradient_height': 35, 'direction': 'symmetric', 'falloff_type': 'linear'}
         elif shape == 'Ellipsoid':
-            params = {**base_params, 'intensity_radius': 30, 'gradient_radius': 40}
+            params = {**base_params, 'intensity_radius': 15, 'gradient_radius': 15, 'falloff_type': 'linear'}
         elif shape == 'Diamond':
-            params = {**base_params, 'intensity_width': 60, 'gradient_height': 60}
+            params = {**base_params, 'intensity_width': 35, 'gradient_height': 35, 'falloff_type': 'linear'}
         else:
             params = base_params
 
         widget = WidgetFactory.create_widget(shape_map[shape], **params)
+    
+        # Sätt nd_ref för callback
         widget.nd_ref = True
-
+    
         return widget
 
     def measure_fps(self):
@@ -781,7 +933,9 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         shape = self.test_widget_type.currentText()
         x = self.test_x.value()
         y = self.test_y.value()
-        test_widget = self.create_test_widget(shape, x, y)
+        falloff = self.falloff_type.currentText() if hasattr(self, 'falloff_type') else 'linear'
+    
+        test_widget = self.create_test_widget(shape, x, y, falloff)
     
         self.nd_manager.widgets.clear()
         self.nd_manager.add_widget(test_widget)
@@ -971,6 +1125,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
     
         if hasattr(self, 'mc_renderer') and self.mc_renderer:
             # Lower sampling = more woodgrain, Higher sampling = smoother
+
             self.mc_renderer.set_sampling_rate(rate)
             self.update_render_view()
         
@@ -983,3 +1138,70 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             self.mc_renderer.use_preintegration = (state == Qt.Checked)
             self.update_render_view()
             self.measure_fps()
+
+    def refresh_texture_display(self):
+        """Uppdatera TF-texturvisualiseringen"""
+        if not hasattr(self, 'mc_renderer') or self.mc_renderer is None:
+            print("   No renderer available for texture")
+            return
+    
+        try:
+            # Bygg textur från widgets
+            widgets = self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
+            if widgets:
+                texture = self.mc_renderer.build_2d_texture(widgets)
+                if texture is not None and hasattr(self, 'texture_display'):
+                    self.texture_display.update_texture(texture)
+                    print(f"   ✅ Texture updated - max alpha: {np.max(texture[:,:,3]):.3f}")
+                else:
+                    print("   ⚠️ No texture generated")
+            else:
+                print("   ⚠️ No widgets found")
+        except Exception as e:
+            print(f"   ❌ Error refreshing texture: {e}")
+
+
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+class TFTextureDisplay(FigureCanvas):
+    """Visar 2D TF-texturen för debugging"""
+    
+    def __init__(self, parent=None, width=4, height=4, dpi=80):
+        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        super().__init__(self.fig)
+        self.setParent(parent)
+        
+        self.ax = self.fig.add_subplot(111)
+        self.im = None
+        self.setup_axes()
+        
+    def setup_axes(self):
+        self.ax.set_xlim(0, 255)
+        self.ax.set_ylim(0, 255)
+        self.ax.set_xlabel("X-feature (Intensity)")
+        self.ax.set_ylabel("Y-feature (Gradient/Feature)")
+        self.ax.set_title("2D TF Texture")
+        self.ax.grid(True, alpha=0.3)
+        
+    def update_texture(self, texture_rgba):
+        """Uppdatera displayen med ny textur (256x256x4)"""
+        if texture_rgba is None:
+            return
+        
+        # Visa ALPHA-kanalen (opaciteten) istället för RGB
+        # Detta visar tydligt widgetens FORM!
+        alpha = texture_rgba[:, :, 3]
+    
+        if self.im is None:
+            self.im = self.ax.imshow(
+                alpha, origin='lower', extent=(0, 255, 0, 255),
+                aspect='auto', interpolation='nearest', cmap='hot'
+            )
+        else:
+            self.im.set_data(alpha)
+    
+        # Uppdatera titel med info
+        max_alpha = np.max(alpha)
+        self.ax.set_title(f"2D TF Texture (opacity, max: {max_alpha:.2f})")
+        self.draw()

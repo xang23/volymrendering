@@ -9,12 +9,14 @@ class WidgetType(Enum):
 
 class TFWidget:
     # Base widget class with common functionality
-    def __init__(self, widget_type, center_intensity=128, center_gradient=128, opacity=1.0, color=(1.0, 1.0, 1.0)):
+    def __init__(self, widget_type, center_intensity=128, center_gradient=128, opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max', falloff_type='gaussian'):
         self.widget_type = widget_type
         self.center_intensity = center_intensity
         self.center_gradient = center_gradient
         self.opacity = opacity
         self.color = color
+        self.blend_mode = blend_mode
+        self.falloff_type = falloff_type  # 'gaussian', 'linear', 'constant', 'power2'
         self.selected = False
         
     def calculate_opacity(self, intensity, gradient):
@@ -31,17 +33,39 @@ class TFWidget:
         """Update a parameter value"""
         raise NotImplementedError
 
+    def apply_falloff(self, distance):
+        """Applicera falloff baserat på vald typ"""
+        if self.falloff_type == 'gaussian':
+            return np.exp(-distance**2 / 2)
+        elif self.falloff_type == 'linear':
+            return max(0, 1 - distance)
+        elif self.falloff_type == 'constant':
+            return 1.0 if distance <= 1 else 0.0
+        elif self.falloff_type == 'power2':
+            return max(0, 1 - distance**2)
+        elif self.falloff_type == 'power3':
+            return max(0, 1 - distance**3)
+        else:
+            return np.exp(-distance**2 / 2)
+
 class GaussianWidget(TFWidget):
-    def __init__(self, center_intensity=128, center_gradient=128, intensity_std=30, gradient_std=30, opacity=1.0, color=(1.0, 1.0, 1.0)):
-        super().__init__(WidgetType.GAUSSIAN, center_intensity, center_gradient, opacity, color)
-        self.intensity_std = intensity_std
-        self.gradient_std = gradient_std
+    def __init__(self, center_intensity=128, center_gradient=128, 
+                 intensity_std=30, gradient_std=30,
+                 opacity=1.0, color=(1.0, 1.0, 1.0), blend_mode='max',
+                 falloff_type='gaussian'):  # Default gaussian
+        super().__init__(WidgetType.GAUSSIAN, center_intensity, center_gradient, 
+                        opacity, color, blend_mode, falloff_type)
+        self.intensity_std = max(1, intensity_std)
+        self.gradient_std = max(1, gradient_std)
         
     def calculate_opacity(self, intensity, gradient):
         dx = (intensity - self.center_intensity) / self.intensity_std
         dy = (gradient - self.center_gradient) / self.gradient_std
-        distance_sq = dx*dx + dy*dy
-        return self.opacity * np.exp(-distance_sq / 2)
+        distance = np.sqrt(dx*dx + dy*dy)
+        
+        # Använd den valda falloff-typen
+        falloff = self.apply_falloff(distance)
+        return self.opacity * falloff
     
     def sample_for_vtk(self, num_samples=50):
         samples = []
