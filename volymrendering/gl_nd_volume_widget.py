@@ -40,8 +40,10 @@ uniform float u_rot_x;
 uniform float u_rot_y;
 uniform float u_zoom;
 uniform float u_opacity_scale;
+uniform float u_visibility_boost;
+uniform float u_sampling_rate;
 
-const int MAX_STEPS = 192; //#High 384, for better interactivness 192
+const int MAX_STEPS = 384;
 
 mat3 rotX(float a)
 {
@@ -70,16 +72,19 @@ void main()
     vec4 accum = vec4(0.0);
 
     mat3 R = rotY(u_rot_y) * rotX(u_rot_x);
-
     vec2 screen = (v_uv - vec2(0.5)) * u_zoom;
+
+    int steps = int(clamp(u_sampling_rate * 128.0, 32.0, float(MAX_STEPS)));
 
     for (int i = 0; i < MAX_STEPS; ++i)
     {
-        float z = float(i) / float(MAX_STEPS - 1);
+        if (i >= steps)
+            break;
+
+        float z = float(i) / float(steps - 1);
 
         vec3 local = vec3(screen.x, screen.y, z - 0.5);
         vec3 rotated = R * local;
-
         vec3 pos = rotated + vec3(0.5);
 
         if (
@@ -117,16 +122,27 @@ void main()
         }
         else
         {
-            // TRUE 2D TRANSFER FUNCTION LOOKUP
+            // TRUE 2D transfer-function lookup.
             sample_color = texture(u_tf2d, vec2(fx, fy));
 
-            // Base opacity scale for visibility
+            // Base alpha scale. Your TF texture can have alpha up to 1.0,
+            // but ray marching needs smaller per-sample opacity.
             sample_color.a *= 0.08;
 
-            // Opacity correction for discrete ray samples
-            sample_color.a = 1.0 - pow(1.0 - sample_color.a, u_opacity_scale);
+            // User visibility boost. This is for exploration, not physical accuracy.
+            sample_color.a *= u_visibility_boost;
+            sample_color.a = clamp(sample_color.a, 0.0, 1.0);
+
+            // Opacity correction for changed ray sampling rate.
+            // Reference sampling is 2.0. Lower sampling gets stronger per-sample alpha;
+            // higher sampling gets weaker per-sample alpha.
+            float correction = 2.0 / max(u_sampling_rate, 0.01);
+            correction *= u_opacity_scale;
+
+            sample_color.a = 1.0 - pow(1.0 - sample_color.a, correction);
         }
 
+        // Front-to-back alpha compositing.
         accum.rgb += (1.0 - accum.a) * sample_color.rgb * sample_color.a;
         accum.a   += (1.0 - accum.a) * sample_color.a;
 
@@ -164,8 +180,14 @@ class GLNDVolumeWidget(QOpenGLWidget):
         self.force_red = False
         self.pending_upload = False
 
+        self.tf_texture_size = 256
+        self.interactive_mode = False
+        self.max_steps = 192
+
         self.setFocusPolicy(Qt.StrongFocus)
         self.opacity_scale = 1.0
+        self.visibility_boost = 1.0
+        self.sampling_rate = 2.0
 
         self.rot_x = 0.0
         self.rot_y = 0.0
@@ -237,7 +259,7 @@ class GLNDVolumeWidget(QOpenGLWidget):
         if same_features:
             print("[GL-ND] Updating only TRUE 2D TF texture")
             self.makeCurrent()
-            tf = build_tf_texture_2d_debug(self.widgets, size=256)
+            tf = build_tf_texture_2d_debug(self.widgets, size=self.tf_texture_size, verbose=False)
 
             if self.tex_tf:
                 glDeleteTextures([self.tex_tf])
@@ -301,12 +323,19 @@ class GLNDVolumeWidget(QOpenGLWidget):
         glUniform1f(glGetUniformLocation(self.program, "u_rot_x"), self.rot_x)
         glUniform1f(glGetUniformLocation(self.program, "u_rot_y"), self.rot_y)
         glUniform1f(glGetUniformLocation(self.program, "u_opacity_scale"), self.opacity_scale)
+        glUniform1f(glGetUniformLocation(self.program, "u_visibility_boost"), self.visibility_boost)
+        glUniform1f(glGetUniformLocation(self.program, "u_sampling_rate"), self.sampling_rate)
 
         glBindVertexArray(self.vao)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
         glBindVertexArray(0)
 
         glUseProgram(0)
+
+    def set_interactive_mode(self, enabled):
+        self.interactive_mode = enabled
+
+        self.update()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_0:
@@ -360,7 +389,7 @@ class GLNDVolumeWidget(QOpenGLWidget):
         self.tex_x = self._upload_3d_texture(x_vol, self.feature_x)
         self.tex_y = self._upload_3d_texture(y_vol, self.feature_y)
 
-        tf = build_tf_texture_2d_debug(self.widgets, size=256)
+        tf = build_tf_texture_2d_debug(self.widgets, size=self.tf_texture_size, verbose=False)
         self.tex_tf = self._upload_2d_texture(tf)
 
         print("[GL-ND] Upload complete")
