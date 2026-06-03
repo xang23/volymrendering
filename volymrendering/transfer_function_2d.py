@@ -31,18 +31,18 @@ class TransferFunction2D(BaseTransferFunction):
             self.log_checkbox.stateChanged.connect(self._on_log_toggled)
 
         # SET INITIAL VIEW TO 0-255
-        self.ax.set_xlim(0, 255)
-        self.ax.set_ylim(0, 255)
+        self.ax.set_xlim(0, 256)
+        self.ax.set_ylim(0, 256)
+
     
         self._draw()
 
     def _setup_histogram_display(self):
         """Setup the 2D histogram visualization."""
         disp = self._get_display_data()
-        norm = LogNorm() if (self.log_checkbox and self.log_checkbox.isChecked()) else None
         self.im = self.ax.imshow(
-            disp.T, origin='lower', cmap='hot', norm=norm,
-            interpolation='nearest', extent=(0,255,0,255), aspect='auto'
+            disp.T, origin='lower', cmap='hot',
+            interpolation='bilinear', extent=(0,255,0,255), aspect='equal'
         )
 
         # Add proper axes and labels
@@ -60,9 +60,13 @@ class TransferFunction2D(BaseTransferFunction):
         arr = self.raw.astype(np.float64)
         if self.log_checkbox and self.log_checkbox.isChecked():
             arr = np.log1p(arr)
-        m = arr.max()
-        if m > 0:
-            arr /= m
+        
+        arr_min = arr.min()
+        arr_max = arr.max()
+
+        if arr_max > arr_min:
+            arr = (arr - arr_min) / (arr_max - arr_min)
+
         return arr
 
     def _on_log_toggled(self, state):

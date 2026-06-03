@@ -58,10 +58,21 @@ class UnifiedTFCanvas(BaseTransferFunction):
     
         if self.tf_type == '2d' and self.data is not None and self.gradient_data is not None:
             # ALWAYS use 0-255 range for histogram
+            
+            self.data = self.data.astype(np.float32)
+            self.gradient_data = self.gradient_data.astype(np.float32)
+
+            #self.data = np.clip(self.data, 0, 255)
+            #self.gradient_data = np.clip(self.gradient_data, 0, 255)
+
             hist2d, x_edges, y_edges = np.histogram2d(
                 self.data, self.gradient_data, 
                 bins=256, 
-                range=((0, 255), (0, 255))  # ← HARDCODED 0-255!
+                range=(
+                    (np.min(self.data), np.max(self.data)),
+                    (np.min(self.gradient_data), np.max(self.gradient_data))
+                )
+
             )
             self.mesh = self.ax.pcolormesh(
                 x_edges, y_edges, np.log1p(hist2d.T),
@@ -69,8 +80,10 @@ class UnifiedTFCanvas(BaseTransferFunction):
             )
         
             # Set initial view to show full 0-255 range
-            self.ax.set_xlim(0, 255)
-            self.ax.set_ylim(0, 255)
+            
+            self.ax.set_xlim(0,255)
+            self.ax.set_ylim(0,255)
+
         
         elif self.tf_type == '1d' and self.data is not None:
             # ALWAYS use 0-255 range for 1D
@@ -299,8 +312,8 @@ class UnifiedTFCanvas(BaseTransferFunction):
     def _draw_gaussian_widget(self, widget, color, linewidth):
         ellipse = Ellipse(
             (widget.center_intensity, widget.center_gradient),
-            width=widget.intensity_std * 2,
-            height=widget.gradient_std * 2,
+            width=widget.intensity_std * 6.0,
+            height=widget.gradient_std * 6.0,
             fill=False, edgecolor=color, linewidth=linewidth, alpha=0.8
         )
         self.ax.add_patch(ellipse)

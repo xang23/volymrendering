@@ -21,7 +21,7 @@ class DatasetLoader:
         
         file_name, _ = QtWidgets.QFileDialog.getOpenFileName(
             self.parent_window, "Open Volume Dataset", start_dir or "",
-            "VTI Files (*.vti);;VTK Files (*.vtk);;VOL/RAW Files (*.vol *.raw);;MHD Files (*.mhd);;All Files (*)"
+            "VTI Files (*.vti);;VTK Files (*.vtk);;VOL/RAW/IVF Files (*.vol *.raw *.ivf);;MHD Files (*.mhd);;All Files (*)"
         )
         
         if not file_name:
@@ -78,7 +78,7 @@ class DatasetLoader:
             return None
         elif ext == '.mhd':
             reader = vtk.vtkMetaImageReader()
-        elif ext in ('.raw', '.vol'):
+        elif ext in ('.raw', '.vol', '.ivf'):
             reader = None
         else:
             raise ValueError(f"Unsupported file format: {ext}")
@@ -91,7 +91,7 @@ class DatasetLoader:
         reader = None
         np_scalars = None
 
-        if ext in ('.raw', '.vol'):
+        if ext in ('.raw', '.vol', '.ivf'):
             settings = self._ask_raw_settings(file_path)
             if settings is None:
                 raise RuntimeError("Raw/.vol load cancelled or invalid settings.")
@@ -115,6 +115,7 @@ class DatasetLoader:
             
             vtk_data = vtk.vtkImageData()
             vtk_data.SetDimensions(dims[0], dims[1], dims[2])
+            vtk_data.SetSpacing(1.0, 1.0, 1.0)
             
             vtk_type = {
                 'uint8': vtk.VTK_UNSIGNED_CHAR,
@@ -124,11 +125,14 @@ class DatasetLoader:
             
             vtk_data.AllocateScalars(vtk_type, 1)
             flat = np.ascontiguousarray(arr.ravel(order='C'))
-            vtk_arr = numpy_support.numpy_to_vtk(num_array=flat, deep=True)
+            vtk_arr = numpy_support.numpy_to_vtk(num_array=flat, deep=True, array_type = vtk_type)
             vtk_data.GetPointData().SetScalars(vtk_arr)
             image_data = vtk_data
             reader = None
-            np_scalars = flat.astype(np.float32)
+            
+            vtk_scalars = vtk_data.GetPointData().GetScalars()
+            np_scalars = numpy_support.vtk_to_numpy(vtk_scalars).astype(np.float32)
+
 
         elif ext == '.vtk':
             reader = vtk.vtkDataSetReader()
@@ -192,7 +196,17 @@ class DatasetLoader:
                         print(f"Auto-discovered: {array_name}")
     
         # Compute and add Gradient
-        gradient = self.compute_gradient(image_data, reader)
+        
+        width, height, depth = image_data.GetDimensions()
+        volume = np_scalars.reshape((depth, height, width))
+
+        # compute gradient in NumPy (aligned with your scalar data)
+        gx = np.gradient(volume, axis=2)
+        gy = np.gradient(volume, axis=1)
+        gz = np.gradient(volume, axis=0)
+
+        gradient = np.sqrt(gx**2 + gy**2 + gz**2).astype(np.float32).flatten()
+
         all_features['Gradient'] = gradient
         gradient_vtk = numpy_support.numpy_to_vtk(gradient)
         gradient_vtk.SetName('Gradient')
@@ -375,28 +389,68 @@ class DatasetLoader:
         return np.zeros_like(np_scalars)
     
     def normalize_data(self, np_scalars, np_gradient):
+
+        print("\n===== NORMALIZATION DEBUG =====")
+
+        print("Intensity:")
+        print("  min/max:", np_scalars.min(), np_scalars.max())
+        print(
+            "  percentiles:",
+            np.percentile(np_scalars, [0, 1, 5, 50, 95, 99, 99.5, 100])
+        )
+
+        print("\nGradient:")
+        print("  min/max:", np_gradient.min(), np_gradient.max())
+        print(
+            "  percentiles:",
+            np.percentile(np_gradient, [0, 1, 5, 50, 95, 99, 99.5, 100])
+        )
+
         raw_int_min, raw_int_max = np_scalars.min(), np_scalars.max()
         intensity_range = (raw_int_min, raw_int_max)
-        
+
         if raw_int_max - raw_int_min == 0:
             normalized_scalars = np.zeros_like(np_scalars)
         else:
-            normalized_scalars = 255.0 * (np_scalars - raw_int_min) / (raw_int_max - raw_int_min)
+            normalized_scalars = (
+                255.0 * (np_scalars - raw_int_min)
+                / (raw_int_max - raw_int_min)
+            )
 
         raw_grad_min, raw_grad_max = np_gradient.min(), np_gradient.max()
         gradient_range = (raw_grad_min, raw_grad_max)
-        
+
         if raw_grad_max - raw_grad_min == 0:
             gradient_normalized = np.zeros_like(np_gradient)
         else:
-            gradient_normalized = 255.0 * (np_gradient - raw_grad_min) / (raw_grad_max - raw_grad_min)
+            gradient_normalized = (
+                255.0 * (np_gradient - raw_grad_min)
+                / (raw_grad_max - raw_grad_min)
+            )
 
-        return normalized_scalars, gradient_normalized, intensity_range, gradient_range
+        print("\nNormalized Gradient:")
+        print(
+            "  percentiles:",
+            np.percentile(
+                gradient_normalized,
+                [0, 1, 5, 50, 95, 99, 99.5, 100]
+            )
+        )
+
+        print("================================\n")
+
+        return (
+            normalized_scalars,
+            gradient_normalized,
+            intensity_range,
+            gradient_range,
+        )
 
     def normalize_single(self, data_array):
         data_min, data_max = np.min(data_array), np.max(data_array)
         if data_max > data_min:
-            return (255.0 * (data_array - data_min) / (data_max - data_min)).astype(np.float32)
+            norm = 255.0 * (data_array - data_min) / (data_max - data_min)
+            return np.clip(norm, 0, 255).astype(np.float32)
         return np.zeros_like(data_array, dtype=np.float32)
 
     def create_multicomponent_volume(self, image_data, all_features):

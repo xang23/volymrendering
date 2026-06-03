@@ -46,7 +46,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         # Adaptive rendering quality
         self.interactive_sampling_rate = 0.75
         self.final_sampling_rate = 2.0
-        self.final_render_delay_ms = 2000
+        self.final_render_delay_ms = 500
 
         self.final_render_timer = QTimer(self)
         self.final_render_timer.setSingleShot(True)
@@ -108,6 +108,11 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         title = QtWidgets.QLabel(f"<h2>{self.feat_x} vs {self.feat_y}</h2>")
         title.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(title)
+
+        self.tf_preview_label = QtWidgets.QLabel()
+        self.tf_preview_label.setFixedHeight(180)
+        self.tf_preview_label.setAlignment(Qt.AlignCenter)
+        left_layout.addWidget(self.tf_preview_label)
 
         info = (
             f"Raw: {self.feat_x}=[{self.x_range[0]:.3f}, {self.x_range[1]:.3f}] | "
@@ -199,11 +204,6 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         render_title.setAlignment(Qt.AlignCenter)
         right_layout.addWidget(render_title)
 
-        self.tf_preview_label = QtWidgets.QLabel()
-        self.tf_preview_label.setFixedHeight(180)
-        self.tf_preview_label.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(self.tf_preview_label)
-
         self.gl_widget = GLNDVolumeWidget()
         right_layout.addWidget(self.gl_widget, 1)
 
@@ -262,9 +262,15 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.final_sampling_spin.valueChanged.connect(self.on_final_sampling_changed)
         layout.addRow("Final Sampling:", self.final_sampling_spin)
 
-        self.force_red_btn = QtWidgets.QPushButton("Toggle Red Debug")
-        self.force_red_btn.clicked.connect(self.force_real_red)
-        layout.addRow(self.force_red_btn)
+        self.bbox_checkbox = QtWidgets.QCheckBox("Show Bounding Box")
+        self.bbox_checkbox.setChecked(True)
+        self.bbox_checkbox.stateChanged.connect(self.on_bounding_box_changed)
+        layout.addRow(self.bbox_checkbox)
+
+        self.axes_checkbox = QtWidgets.QCheckBox("Show Axes")
+        self.axes_checkbox.setChecked(True)
+        self.axes_checkbox.stateChanged.connect(self.on_axes_changed)
+        layout.addRow(self.axes_checkbox)
 
         parent_layout.addWidget(group)
 
@@ -357,6 +363,10 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.texture_display = TFTextureDisplay(self, width=4, height=4)
         parent_layout.addWidget(self.texture_display)
 
+        self.tf_size_label = QtWidgets.QLabel("TF texture: 256 x 256")
+        self.tf_size_label.setAlignment(Qt.AlignCenter)
+        parent_layout.addWidget(self.tf_size_label)
+
         refresh_btn = QtWidgets.QPushButton("Refresh Texture Preview")
         refresh_btn.clicked.connect(self.update_tf_texture_preview)
         parent_layout.addWidget(refresh_btn)
@@ -364,6 +374,16 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Render controls
     # ------------------------------------------------------------------
+    def on_bounding_box_changed(self, state):
+        if hasattr(self, "gl_widget") and self.gl_widget:
+            self.gl_widget.show_bounding_box = state == Qt.Checked
+            self.gl_widget.update()
+
+
+    def on_axes_changed(self, state):
+        if hasattr(self, "gl_widget") and self.gl_widget:
+            self.gl_widget.show_axes = state == Qt.Checked
+            self.gl_widget.update()
 
     def on_visibility_changed(self, value):
         boost = value / 100.0
@@ -444,15 +464,14 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         for widget in projected:
             self.tf_canvas.add_widget(widget)
 
-        print(f"Loaded {len(projected)} widgets into popup")
+        print(f"Loaded {len(self.tf_canvas.widgets)} widgets into popup")
         self.update_widget_list()
         self.update_tf_texture_preview()
 
     def sync_to_nd(self):
-        self.nd_manager.widgets.clear()
-
         for widget in self.tf_canvas.widgets:
-            self.nd_manager.add_widget(widget)
+            if widget not in self.nd_manager.widgets:
+                self.nd_manager.add_widget(widget)
 
         self.update_render_view(interactive=True)
 
@@ -467,29 +486,33 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         self.update_widget_list()
         self.update_render_view(interactive=True)
 
-        print(f"Loaded {len(projected)} widgets from nD manager")
+        #print(f"Loaded {len(projected)} widgets from nD manager")
 
     def update_render_view(self, interactive=True):
-        print(f"Updating render view for {self.feat_x} vs {self.feat_y}")
-
         if not hasattr(self, "gl_widget"):
             return
 
         widgets = self.nd_manager.project_to_2d(self.feat_x, self.feat_y)
 
+        if interactive:
+            self.gl_widget.active_steps = 96         # fast raymarch preview
+        else:
+            self.gl_widget.active_steps = 384        # final raymarch
+
         self.gl_widget.set_feature_pair(
             self.feat_x,
             self.feat_y,
             widgets,
+            verbose=not interactive,
+            rebuild_tf=True,        # IMPORTANT: rebuild even during dragging
         )
 
-        # Preview only when NOT interactive (expensive UI update)
         if not interactive:
             self.update_tf_texture_preview()
+            print(f"[POPUP AXES] Canvas X = {self.feat_x}, Canvas Y = {self.feat_y}")
 
-        # Switch rendering quality
         if interactive:
-            self.render_interactive_quality()
+            self.final_render_timer.start(self.final_render_delay_ms)
         else:
             self.render_final_quality()
 
@@ -685,6 +708,13 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         self.param_group.setVisible(True)
 
+    def refresh_current_widget_edit(self):
+        self.commit_widget_to_nd_ref(self.current_widget)
+        self.tf_canvas._draw()
+        self.update_widget_list()
+        self.update_render_view(interactive=True)
+
+
     def on_widget_param_changed(self, attr, value):
         if self.current_widget is None:
             return
@@ -693,9 +723,8 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         print(f"Updated widget parameter: {attr} = {value}")
 
-        self.tf_canvas._draw()
-        self.sync_to_nd()
-        self.update_widget_list()
+        self.refresh_current_widget_edit()
+
 
     def on_blend_mode_changed(self, blend_mode):
         if self.current_widget is None:
@@ -705,8 +734,8 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         print(f"Updated blend mode: {blend_mode}")
 
-        self.tf_canvas._draw()
-        self.sync_to_nd()
+        self.refresh_current_widget_edit()
+
 
     def on_widget_falloff_changed(self, falloff_type):
         if self.current_widget is None:
@@ -716,8 +745,8 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         print(f"Updated falloff type: {falloff_type}")
 
-        self.tf_canvas._draw()
-        self.sync_to_nd()
+        self.refresh_current_widget_edit()
+
 
     def on_direction_changed(self, direction):
         if self.current_widget is None:
@@ -727,29 +756,38 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         print(f"Updated widget direction: {direction}")
 
-        self.tf_canvas._draw()
-        self.sync_to_nd()
+        self.refresh_current_widget_edit()
+
 
     def on_x_changed(self, value):
-        if self.current_widget:
-            self.current_widget.center_intensity = value
-            self.tf_canvas._draw()
-            self.sync_to_nd()
+        if self.current_widget is None:
+            return
+
+        self.current_widget.center_intensity = value
+
+        self.refresh_current_widget_edit()
+
 
     def on_y_changed(self, value):
-        if self.current_widget:
-            self.current_widget.center_gradient = value
-            self.tf_canvas._draw()
-            self.sync_to_nd()
+        if self.current_widget is None:
+            return
+
+        self.current_widget.center_gradient = value
+
+        self.refresh_current_widget_edit()
+
 
     def on_opacity_changed(self, value):
-        if self.current_widget:
-            self.current_widget.opacity = value
-            self.tf_canvas._draw()
-            self.sync_to_nd()
+        if self.current_widget is None:
+            return
+
+        self.current_widget.opacity = value
+
+        self.refresh_current_widget_edit()
+
 
     def change_color(self):
-        if not self.current_widget:
+        if self.current_widget is None:
             return
 
         qcolor = QtWidgets.QColorDialog.getColor()
@@ -762,8 +800,7 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
             )
 
             self.update_color_button()
-            self.tf_canvas._draw()
-            self.sync_to_nd()
+            self.refresh_current_widget_edit()
 
     def update_color_button(self):
         if hasattr(self, "color_btn") and self.current_widget:
@@ -835,7 +872,17 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
         old_widget = self.current_widget
 
-        new_widget = self.create_test_widget(shape, x, y, falloff)
+        visual_width, visual_height = self.get_widget_visual_size(old_widget)
+
+        new_widget = self.create_test_widget(
+            shape,
+            x,
+            y,
+            falloff,
+            visual_width=visual_width,
+            visual_height=visual_height,
+        )
+
         new_widget.color = old_widget.color
         new_widget.opacity = old_widget.opacity
         new_widget.blend_mode = getattr(old_widget, "blend_mode", "max")
@@ -891,12 +938,46 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         if self.current_widget:
             self.apply_test_to_current_widget()
 
-    def create_test_widget(self, shape, x, y, falloff_type=None):
+
+    def get_widget_visual_size(self, widget):
+        """
+        Return visual width/height in 0..255 feature-space units.
+        """
+
+        if hasattr(widget, "intensity_std"):
+            width = float(widget.intensity_std) * 6.0   # ±3σ
+        elif hasattr(widget, "intensity_width"):
+            width = float(widget.intensity_width)
+        elif hasattr(widget, "intensity_radius"):
+            width = float(widget.intensity_radius) * 2.0
+        else:
+            width = 50.0
+
+        if hasattr(widget, "gradient_std"):
+            height = float(widget.gradient_std) * 6.0   # ±3σ
+        elif hasattr(widget, "gradient_height"):
+            height = float(widget.gradient_height)
+        elif hasattr(widget, "gradient_radius"):
+            height = float(widget.gradient_radius) * 2.0
+        else:
+            height = 50.0
+
+        return max(2.0, width), max(2.0, height)
+
+    def create_test_widget(self, shape, x, y, falloff_type=None, visual_width=50.0, visual_height=50.0):
         from widget_factory import WidgetFactory, WidgetType
 
-        DEFAULT_WIDGET_SIZE = 50
-        DEFAULT_GAUSSIAN_STD = DEFAULT_WIDGET_SIZE / 2.355  # FWHM ≈ 50
-        DEFAULT_RADIUS = DEFAULT_WIDGET_SIZE / 2
+        visual_width = max(2.0, float(visual_width))
+        visual_height = max(2.0, float(visual_height))
+
+        WIDTH_X = visual_width
+        HEIGHT_Y = visual_height
+
+        GAUSS_STD_X = visual_width / 6.0
+        GAUSS_STD_Y = visual_height / 6.0
+
+        RADIUS_X = visual_width / 2.0
+        RADIUS_Y = visual_height / 2.0
 
         shape_map = {
             "Gaussian": WidgetType.GAUSSIAN,
@@ -921,16 +1002,16 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         if shape == 'Gaussian':
             params = {
                 **base_params,
-                'intensity_std': DEFAULT_GAUSSIAN_STD,
-                'gradient_std': DEFAULT_GAUSSIAN_STD,
+                'intensity_std': GAUSS_STD_X,
+                'gradient_std': GAUSS_STD_Y,
                 'falloff_type': 'gaussian'
             }
 
         elif shape == 'Rectangular':
             params = {
                 **base_params,
-                'intensity_width': DEFAULT_WIDGET_SIZE,
-                'gradient_height': DEFAULT_WIDGET_SIZE,
+                'intensity_width': WIDTH_X,
+                'gradient_height': HEIGHT_Y,
                 'falloff': 0,
                 'falloff_type': 'constant'
             }
@@ -938,8 +1019,8 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         elif shape == 'Triangular':
             params = {
                 **base_params,
-                'intensity_width': DEFAULT_WIDGET_SIZE,
-                'gradient_height': DEFAULT_WIDGET_SIZE,
+                'intensity_width': WIDTH_X,
+                'gradient_height': HEIGHT_Y,
                 'direction': 'symmetric',
                 'falloff_type': 'linear'
             }
@@ -947,16 +1028,16 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         elif shape == 'Ellipsoid':
             params = {
                 **base_params,
-                'intensity_radius': DEFAULT_RADIUS,
-                'gradient_radius': DEFAULT_RADIUS,
+                'intensity_radius': RADIUS_X,
+                'gradient_radius': RADIUS_Y,
                 'falloff_type': 'linear'
             }
 
         elif shape == 'Diamond':
             params = {
                 **base_params,
-                'intensity_width': DEFAULT_WIDGET_SIZE,
-                'gradient_height': DEFAULT_WIDGET_SIZE,
+                'intensity_width': WIDTH_X,
+                'gradient_height': HEIGHT_Y,
                 'falloff_type': 'linear'
             }
         else:
@@ -978,16 +1059,24 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
         if hasattr(self, "tf_preview_label"):
             img = np.clip(tf * 255.0, 0, 255).astype(np.uint8)
 
-            alpha = img[:, :, 3:4]
-            rgb = img[:, :, :3]
+            alpha = tf[:, :, 3:4].astype(np.float32)
+            rgb = tf[:, :, :3].astype(np.float32)
 
-            # Make alpha visible without destroying RGB preview.
-            preview = np.maximum(rgb, alpha)
+            bg = np.full_like(rgb, 0.08, dtype=np.float32)
+
+            preview = rgb * alpha + bg * (1.0 - alpha)
+
+            # Optional orientation fix
+            preview = np.flipud(preview)
+
+            # Convert AFTER all float math and flipping
+            img = np.clip(preview * 255.0, 0, 255).astype(np.uint8)
+            img = np.ascontiguousarray(img)
 
             h, w, _ = preview.shape
 
             qimg = QtGui.QImage(
-                preview.data,
+                img.data,
                 w,
                 h,
                 3 * w,
@@ -1004,10 +1093,35 @@ class NDFeaturePopup(QtWidgets.QMainWindow):
 
             self.tf_preview_label.setPixmap(pixmap)
 
+
+    def commit_widget_to_nd_ref(self, widget):
+        target = getattr(widget, "nd_ref", None)
+
+        if target is None or target is True:
+            target = widget
+
+        attrs = [
+            "falloff_type",
+            "falloff",
+            "falloff_power",
+            "opacity",
+            "blend_mode",
+            "color",
+            "intensity_std",
+            "gradient_std",
+            "intensity_width",
+            "gradient_height",
+            "intensity_radius",
+            "gradient_radius",
+            "direction",
+        ]
+
+        for attr in attrs:
+            if hasattr(widget, attr):
+                setattr(target, attr, getattr(widget, attr))
     # ------------------------------------------------------------------
     # Screenshot / close
     # ------------------------------------------------------------------
-
     def take_screenshot(self):
         screenshot_dir = "screenshots"
         os.makedirs(screenshot_dir, exist_ok=True)

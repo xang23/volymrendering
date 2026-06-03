@@ -40,58 +40,59 @@ class NDWidgetManager:
                 widget.nd_scales[name] = 30
     
     def add_widget(self, widget):
-        """Add widget to nD management"""
-        # Initialize nD coordinates from 2D position (in display space)
-        widget.nd_coords = {
-            'Intensity': widget.center_intensity,
-            'Gradient': widget.center_gradient
-        }
-        # Initialize scales
-        widget.nd_scales = {}
-        if hasattr(widget, 'intensity_std'):
-            widget.nd_scales['Intensity'] = widget.intensity_std
-        if hasattr(widget, 'gradient_std'):
-            widget.nd_scales['Gradient'] = widget.gradient_std
-    
-        # ===== LÄGG TILL DETTA: Sätt default skalor för alla features =====
+        """Add widget to nD management without duplicating it."""
+
+        if widget in self.widgets:
+            return widget
+
+        if not hasattr(widget, "nd_coords"):
+            widget.nd_coords = {}
+
+        if not hasattr(widget, "nd_scales"):
+            widget.nd_scales = {}
+
+        widget.nd_coords.setdefault("Intensity", widget.center_intensity)
+        widget.nd_coords.setdefault("Gradient", widget.center_gradient)
+
+        if hasattr(widget, "intensity_std"):
+            widget.nd_scales.setdefault("Intensity", widget.intensity_std)
+
+        if hasattr(widget, "gradient_std"):
+            widget.nd_scales.setdefault("Gradient", widget.gradient_std)
+
         for feat in self.feature_names:
-            if feat not in widget.nd_coords:
-                widget.nd_coords[feat] = 128
-            if feat not in widget.nd_scales:
-                widget.nd_scales[feat] = 30  # Default scale (3 sigma = 90, reasonable)
-        # ================================================================
-    
+            widget.nd_coords.setdefault(feat, 128)
+            widget.nd_scales.setdefault(feat, 30)
+
         self.widgets.append(widget)
         return widget
     
     def project_to_2d(self, feat_x, feat_y):
-        """Project nD widgets to 2D plane - returns DISPLAY coordinates (0-255)"""
+        """Project nD widgets to 2D plane - returns DISPLAY coordinates (0-255)."""
         projected = []
 
         for nd_widget in self.widgets:
             widget_2d = copy(nd_widget)
-        
-            # ===== CRITICAL: Store reference to original nD widget =====
+
             widget_2d.nd_ref = nd_widget
             widget_2d.projection = (feat_x, feat_y)
-            # =========================================================
-    
-            # Get display coordinates (0-255) from nD storage
-            display_x = nd_widget.nd_coords.get(feat_x, 128)
-            display_y = nd_widget.nd_coords.get(feat_y, 128)
-        
-            # ===== FIX: Use display coordinates directly =====
-            widget_2d.center_intensity = display_x  # ← 0-255, not raw!
-            widget_2d.center_gradient = display_y   # ← 0-255, not raw!
-        
-            print(f"   Projected: {feat_x}={display_x:.1f}, {feat_y}={display_y:.1f}")  # Debug
-            # Scales stay in display space too
-            if hasattr(widget_2d, 'intensity_std'):
-                widget_2d.intensity_std = nd_widget.nd_scales.get(feat_x, 30)
-            if hasattr(widget_2d, 'gradient_std'):
-                widget_2d.gradient_std = nd_widget.nd_scales.get(feat_y, 30)
-            # =================================================
-    
+
+            display_x = nd_widget.nd_coords.get(feat_x, nd_widget.center_intensity)
+            display_y = nd_widget.nd_coords.get(feat_y, nd_widget.center_gradient)
+
+            widget_2d.center_intensity = display_x
+            widget_2d.center_gradient = display_y
+
+            print(f"   Projected: {feat_x}={display_x:.1f}, {feat_y}={display_y:.1f}")
+
+            # IMPORTANT:
+            # Do not overwrite widget sizes here.
+            # Size attributes are copied from nd_widget by copy(nd_widget).
+            # That preserves:
+            # - intensity_std / gradient_std
+            # - intensity_width / gradient_height
+            # - intensity_radius / gradient_radius
+
             projected.append(widget_2d)
 
         return projected
@@ -121,18 +122,54 @@ class NDWidgetManager:
                 widget_2d.nd_ref.nd_coords[feat_x] = new_x
                 widget_2d.nd_ref.nd_coords[feat_y] = new_y"""
     def update_nd_position(self, widget, x, y, feature_x=None, feature_y=None):
-        """Update widget position in nD space for specific features"""
+        """
+        Store nD widget coordinates in canonical display-space 0..255.
+        """
+
+        def to_display(val, feat):
+            fv = float(val)
+
+            # Normalized coordinate
+            if 0.0 <= fv <= 1.0:
+                return 255.0 * fv
+
+            # Display-space coordinate
+            if 0.0 <= fv <= 255.0:
+                return fv
+
+            # Raw feature-space coordinate
+            if hasattr(self, "feature_ranges") and feat in self.feature_ranges:
+                vmin, vmax = self.feature_ranges[feat]
+                if vmax > vmin:
+                    return max(0.0, min(255.0, 255.0 * (fv - vmin) / (vmax - vmin)))
+
+            return fv
+
+        target = getattr(widget, "nd_ref", None)
+
+        if target is True or target is None:
+            target = widget
+
+        if not hasattr(target, "nd_coords"):
+            target.nd_coords = {}
+
+        if not hasattr(target, "nd_scales"):
+            target.nd_scales = {}
+
         if feature_x is not None and feature_y is not None:
-            # Update the specified features
-            widget.nd_coords[feature_x] = x
-            widget.nd_coords[feature_y] = y
-            widget.nd_coords[feature_y] = y
-            print(f"   Updated nd_coords: {feature_x}={x:.1f}, {feature_y}={y:.1f}")
-        else:
-            # Legacy fallback - update all features
-            for feature in self.feature_names:
-                if feature not in widget.nd_coords:
-                    widget.nd_coords[feature] = 128
+            dx = to_display(x, feature_x)
+            dy = to_display(y, feature_y)
+
+            target.nd_coords[feature_x] = dx
+            target.nd_coords[feature_y] = dy
+
+            print(f"   Updated nd_coords: {feature_x}={dx:.1f}, {feature_y}={dy:.1f}")
+            return
+
+        for feat in self.feature_names:
+            target.nd_coords.setdefault(feat, 128)
+            target.nd_scales.setdefault(feat, 30)
+
 
     def debug_widgets(self):
         print(f"\n🔍 Current widgets in nd_manager ({len(self.widgets)}):")

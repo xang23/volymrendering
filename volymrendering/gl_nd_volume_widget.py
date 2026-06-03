@@ -1,12 +1,10 @@
-import ctypes
+ï»¿import ctypes
 import numpy as np
 
 from PyQt5.QtWidgets import QOpenGLWidget
 from PyQt5.QtCore import Qt
 
 from OpenGL.GL import *
-
-from tf_texture_builder_debug import build_tf_texture_2d_debug
 
 
 VERT_SHADER = """
@@ -31,7 +29,7 @@ out vec4 fragColor;
 
 uniform sampler3D u_feature_x;
 uniform sampler3D u_feature_y;
-uniform sampler2D u_tf2d;
+uniform sampler3D u_intensity_volume;
 
 uniform int u_debug_mode;
 uniform int u_force_red;
@@ -39,9 +37,31 @@ uniform int u_force_red;
 uniform float u_rot_x;
 uniform float u_rot_y;
 uniform float u_zoom;
+
 uniform float u_opacity_scale;
 uniform float u_visibility_boost;
 uniform float u_sampling_rate;
+uniform int u_active_steps;
+
+// GPU widget transfer function
+const int MAX_WIDGETS = 32;
+
+uniform int u_num_widgets;
+
+// x=center_x, y=center_y, z=size_x, w=size_y
+uniform vec4 u_widget_params[MAX_WIDGETS];
+
+// r,g,b,opacity
+uniform vec4 u_widget_color[MAX_WIDGETS];
+
+// 0=gaussian, 1=rectangular, 2=triangular, 3=ellipsoid, 4=diamond
+uniform int u_widget_type[MAX_WIDGETS];
+
+// 0=max, 1=add, 2=multiply
+uniform int u_widget_blend[MAX_WIDGETS];
+
+// 0=gaussian, 1=linear, 2=constant, 3=power2, 4=power3
+uniform int u_widget_falloff[MAX_WIDGETS];
 
 const int MAX_STEPS = 384;
 
@@ -49,6 +69,7 @@ mat3 rotX(float a)
 {
     float c = cos(a);
     float s = sin(a);
+
     return mat3(
         1.0, 0.0, 0.0,
         0.0, c, -s,
@@ -60,6 +81,7 @@ mat3 rotY(float a)
 {
     float c = cos(a);
     float s = sin(a);
+
     return mat3(
         c, 0.0, s,
         0.0, 1.0, 0.0,
@@ -67,31 +89,230 @@ mat3 rotY(float a)
     );
 }
 
+float applyFalloff(float distance, int falloff_type)
+{
+    if (falloff_type == 0)
+    {
+        return exp(-(distance * distance) / 2.0);
+    }
+    else if (falloff_type == 1)
+    {
+        return max(0.0, 1.0 - distance);
+    }
+    else if (falloff_type == 2)
+    {
+        return distance <= 1.0 ? 1.0 : 0.0;
+    }
+    else if (falloff_type == 3)
+    {
+        return max(0.0, 1.0 - distance * distance);
+    }
+    else if (falloff_type == 4)
+    {
+        return max(0.0, 1.0 - distance * distance * distance);
+    }
+
+    return max(0.0, 1.0 - distance);
+}
+
+float widgetOpacity(float x255, float y255, int i)
+{
+    vec4 p = u_widget_params[i];
+
+    float cx = p.x;
+    float cy = p.y;
+    float sx = max(p.z, 1.0);
+    float sy = max(p.w, 1.0);
+
+    int type = u_widget_type[i];
+    int falloff = u_widget_falloff[i];
+
+    float dx;
+    float dy;
+    float distance;
+
+    if (type == 0)
+    {
+        // Gaussian: sx/sy are standard deviations.
+        dx = (x255 - cx) / sx;
+        dy = (y255 - cy) / sy;
+        distance = sqrt(dx * dx + dy * dy);
+
+        if (distance > 3.0)
+            return 0.0;
+
+        return applyFalloff(distance, falloff);
+    }
+    else if (type == 1)
+    {
+        // Rectangular: sx/sy are full width/height.
+        dx = abs(x255 - cx) / max(sx * 0.5, 1.0);
+        dy = abs(y255 - cy) / max(sy * 0.5, 1.0);
+        distance = max(dx, dy);
+
+        return applyFalloff(distance, falloff);
+    }
+    else if (type == 2)
+    {
+        // Symmetric triangle/pyramid.
+        dx = abs(x255 - cx) / max(sx * 0.5, 1.0);
+        dy = abs(y255 - cy) / max(sy * 0.5, 1.0);
+        distance = dx + dy;
+
+        if (distance > 1.0)
+            return 0.0;
+
+        return applyFalloff(distance, falloff);
+    }
+    else if (type == 3)
+    {
+        // Ellipsoid: sx/sy are radii.
+        dx = (x255 - cx) / sx;
+        dy = (y255 - cy) / sy;
+        distance = sqrt(dx * dx + dy * dy);
+
+        if (distance > 1.0)
+            return 0.0;
+
+        return applyFalloff(distance, falloff);
+    }
+    else if (type == 4)
+    {
+        // Diamond: sx/sy are full width/height.
+        dx = abs(x255 - cx) / max(sx * 0.5, 1.0);
+        dy = abs(y255 - cy) / max(sy * 0.5, 1.0);
+        distance = dx + dy;
+
+        if (distance > 1.0)
+            return 0.0;
+
+        return applyFalloff(distance, falloff);
+    }
+
+    return 0.0;
+}
+
+vec3 estimateNormal(vec3 pos)
+{
+    float e = 1.0 / 128.0;
+
+    float xp = texture(u_intensity_volume, pos + vec3(e, 0.0, 0.0)).r;
+    float xm = texture(u_intensity_volume, pos - vec3(e, 0.0, 0.0)).r;
+
+    float yp = texture(u_intensity_volume, pos + vec3(0.0, e, 0.0)).r;
+    float ym = texture(u_intensity_volume, pos - vec3(0.0, e, 0.0)).r;
+
+    float zp = texture(u_intensity_volume, pos + vec3(0.0, 0.0, e)).r;
+    float zm = texture(u_intensity_volume, pos - vec3(0.0, 0.0, e)).r;
+
+    vec3 g = vec3(xp - xm, yp - ym, zp - zm);
+
+    if (length(g) < 1e-5)
+        return vec3(0.0, 0.0, 1.0);
+
+    return normalize(g);
+}
+
+vec4 evaluateTransferFunction(float fx, float fy)
+{
+    float x255 = clamp(fx, 0.0, 1.0) * 255.0;
+    float y255 = clamp(fy, 0.0, 1.0) * 255.0;
+
+    vec3 out_rgb = vec3(0.0);
+    float out_a = 0.0;
+
+    bool any_multiply = false;
+    float multiply_a = 1.0;
+    vec3 multiply_rgb = vec3(1.0);
+
+    for (int i = 0; i < MAX_WIDGETS; ++i)
+    {
+        if (i >= u_num_widgets)
+            break;
+
+        float local_a = widgetOpacity(x255, y255, i);
+        local_a *= u_widget_color[i].a;
+        local_a = clamp(local_a, 0.0, 1.0);
+
+        vec3 local_rgb = u_widget_color[i].rgb;
+        int blend = u_widget_blend[i];
+
+        if (blend == 0)
+        {
+            // max blend
+            if (local_a > out_a)
+            {
+                out_a = local_a;
+                out_rgb = local_rgb;
+            }
+        }
+        else if (blend == 1)
+        {
+            // additive alpha blend in TF space
+            float new_a = clamp(out_a + local_a, 0.0, 1.0);
+
+            if (new_a > 0.00001)
+            {
+                out_rgb = (out_rgb * out_a + local_rgb * local_a) / new_a;
+            }
+
+            out_a = new_a;
+        }
+        else if (blend == 2)
+        {
+            // multiply as mask-like combination
+            any_multiply = true;
+            multiply_a *= (1.0 - local_a);
+            multiply_rgb *= mix(vec3(1.0), local_rgb, local_a);
+        }
+    }
+
+    if (any_multiply)
+    {
+        float mask_a = 1.0 - multiply_a;
+
+        if (mask_a > out_a)
+        {
+            out_a = mask_a;
+            out_rgb = multiply_rgb;
+        }
+    }
+
+    return vec4(out_rgb, out_a);
+}
+
 void main()
 {
     vec4 accum = vec4(0.0);
 
-    mat3 R = rotY(u_rot_y) * rotX(u_rot_x);
+    mat3 R = rotX(u_rot_x) * rotY(u_rot_y);
     vec2 screen = (v_uv - vec2(0.5)) * u_zoom;
 
-    int steps = int(clamp(u_sampling_rate * 128.0, 32.0, float(MAX_STEPS)));
+    int steps = clamp(u_active_steps, 1, MAX_STEPS);
+
+    // Orthographic ray direction (camera forward)
+    vec3 ray_dir = normalize(R * vec3(0.0, 0.0, -1.0));
+
+    // Ray origin per pixel (image plane mapped into volume space)
+    vec3 ray_origin = vec3(screen.x, screen.y, 0.0);
+    ray_origin = R * ray_origin + vec3(0.5);
+
+    // Ray spans through volume center
+    float tmin = -1.2;
+    float tmax =  1.2;
 
     for (int i = 0; i < MAX_STEPS; ++i)
     {
         if (i >= steps)
             break;
 
-        float z = float(i) / float(steps - 1);
+        float t = mix(tmin, tmax, float(i) / float(max(steps - 1, 1)));
+        vec3 pos = ray_origin + t * ray_dir;
 
-        vec3 local = vec3(screen.x, screen.y, z - 0.5);
-        vec3 rotated = R * local;
-        vec3 pos = rotated + vec3(0.5);
-
-        if (
-            pos.x < 0.0 || pos.x > 1.0 ||
+        // Skip samples outside volume (avoids fake scaling!)
+        if (pos.x < 0.0 || pos.x > 1.0 ||
             pos.y < 0.0 || pos.y > 1.0 ||
-            pos.z < 0.0 || pos.z > 1.0
-        )
+            pos.z < 0.0 || pos.z > 1.0)
         {
             continue;
         }
@@ -101,6 +322,7 @@ void main()
 
         vec4 sample_color;
 
+        // Debug modes
         if (u_debug_mode == 1)
         {
             fragColor = vec4(fx, fx, fx, 1.0);
@@ -122,38 +344,78 @@ void main()
         }
         else
         {
-            // TRUE 2D transfer-function lookup.
-            sample_color = texture(u_tf2d, vec2(fx, fy));
+            // Transfer function
+            sample_color = evaluateTransferFunction(fx, fy);
 
-            // Base alpha scale. Your TF texture can have alpha up to 1.0,
-            // but ray marching needs smaller per-sample opacity.
-            sample_color.a *= 0.08;
+            // Skip empty space (performance + clarity)
+            if (sample_color.a < 0.01)
+                continue;
 
-            // User visibility boost. This is for exploration, not physical accuracy.
-            sample_color.a *= u_visibility_boost;
-            sample_color.a = clamp(sample_color.a, 0.0, 1.0);
+            // Normal + lighting
+            vec3 N = estimateNormal(pos);
+            if (dot(N, ray_dir) > 0.0)
+                N = -N;
 
-            // Opacity correction for changed ray sampling rate.
-            // Reference sampling is 2.0. Lower sampling gets stronger per-sample alpha;
-            // higher sampling gets weaker per-sample alpha.
+            vec3 view_dir = -ray_dir;
+            vec3 L = view_dir;
+
+            float diffuse = max(dot(N, L), 0.0);
+
+            float ambient = 0.45;
+            float diffuse_weight = 0.55;
+            float lighting = ambient + diffuse_weight * diffuse;
+
+            sample_color.rgb *= lighting;
+            sample_color.rgb = clamp(sample_color.rgb, 0.0, 1.0);
+
+            // Opacity correction
             float correction = 2.0 / max(u_sampling_rate, 0.01);
             correction *= u_opacity_scale;
 
             sample_color.a = 1.0 - pow(1.0 - sample_color.a, correction);
         }
 
-        // Front-to-back alpha compositing.
+        // Compositing
         accum.rgb += (1.0 - accum.a) * sample_color.rgb * sample_color.a;
         accum.a   += (1.0 - accum.a) * sample_color.a;
 
-        if (accum.a > 0.98)
+        // Early exit
+        if (accum.a > 0.95)
             break;
     }
 
+    // Background blend
     vec3 bg = vec3(0.08, 0.08, 0.08);
     vec3 out_rgb = mix(bg, accum.rgb, accum.a);
 
     fragColor = vec4(out_rgb, 1.0);
+}
+"""
+
+OVERLAY_VERT_SHADER = """
+#version 330 core
+
+layout(location = 0) in vec2 in_pos;
+layout(location = 1) in vec3 in_color;
+
+out vec3 v_color;
+
+void main()
+{
+    v_color = in_color;
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+}
+"""
+
+OVERLAY_FRAG_SHADER = """
+#version 330 core
+
+in vec3 v_color;
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vec4(v_color, 1.0);
 }
 """
 
@@ -166,9 +428,14 @@ class GLNDVolumeWidget(QOpenGLWidget):
         self.vao = None
         self.vbo = None
 
+        self.overlay_program = None
+        self.overlay_vao = None
+        self.overlay_vbo = None
+
         self.tex_x = None
         self.tex_y = None
         self.tex_tf = None
+        self.tex_intensity = None
 
         self.dims = None
         self.all_features = None
@@ -188,11 +455,14 @@ class GLNDVolumeWidget(QOpenGLWidget):
         self.opacity_scale = 1.0
         self.visibility_boost = 1.0
         self.sampling_rate = 2.0
+        self.active_steps = 384
 
         self.rot_x = 0.0
         self.rot_y = 0.0
         self.zoom = 1.0
         self.last_mouse_pos = None
+        self.show_bounding_box = True
+        self.show_axes = True
 
     def mousePressEvent(self, event):
         self.last_mouse_pos = event.pos()
@@ -204,14 +474,22 @@ class GLNDVolumeWidget(QOpenGLWidget):
         dx = event.x() - self.last_mouse_pos.x()
         dy = event.y() - self.last_mouse_pos.y()
 
-        ROTATION_SPEED = 0.005  # try 0.005–0.2 range
+        ROTATION_SPEED = 0.003
 
-        self.rot_x += dy * ROTATION_SPEED
-        self.rot_y += dx * ROTATION_SPEED
+        if event.modifiers() & Qt.ShiftModifier:
+            # Shift + drag = horizontal rotation only
+            self.rot_y += dx * ROTATION_SPEED
+
+        elif event.modifiers() & Qt.ControlModifier:
+            # Ctrl + drag = vertical rotation only
+            self.rot_x += dy * ROTATION_SPEED
+
+        else:
+            # Normal drag = free rotation
+            self.rot_x += dy * ROTATION_SPEED
+            self.rot_y += dx * ROTATION_SPEED
 
         self.last_mouse_pos = event.pos()
-
-        #print(f"[GL-ND] rotation: x={self.rot_x:.1f}, y={self.rot_y:.1f}")
         self.update()
 
     def wheelEvent(self, event):
@@ -244,7 +522,7 @@ class GLNDVolumeWidget(QOpenGLWidget):
 
         self.update()
 
-    def set_feature_pair(self, feature_x, feature_y, widgets):
+    def set_feature_pair(self, feature_x, feature_y, widgets, verbose=False, rebuild_tf=False):
         same_features = (
             self.feature_x == feature_x and
             self.feature_y == feature_y and
@@ -255,22 +533,16 @@ class GLNDVolumeWidget(QOpenGLWidget):
         self.feature_x = feature_x
         self.feature_y = feature_y
         self.widgets = widgets
+        print(f"[GL AXES] shader fx = {feature_x}, shader fy = {feature_y}")
 
         if same_features:
-            print("[GL-ND] Updating only TRUE 2D TF texture")
-            self.makeCurrent()
-            tf = build_tf_texture_2d_debug(self.widgets, size=self.tf_texture_size, verbose=False)
-
-            if self.tex_tf:
-                glDeleteTextures([self.tex_tf])
-
-            self.tex_tf = self._upload_2d_texture(tf)
-            self.doneCurrent()
+            # GPU widget path: no TF texture rebuild needed.
             self.update()
         else:
-            print("[GL-ND] Feature pair changed: uploading feature volumes + TF")
+            print("[GL-ND] Feature pair changed: uploading feature volumes")
             self.pending_upload = True
             self.update()
+
 
     def initializeGL(self):
         print("\n[GL-ND] initializeGL")
@@ -280,6 +552,8 @@ class GLNDVolumeWidget(QOpenGLWidget):
 
         self.program = self._create_program(VERT_SHADER, FRAG_SHADER)
         self._create_quad()
+        self.overlay_program = self._create_program(OVERLAY_VERT_SHADER, OVERLAY_FRAG_SHADER)
+        self._create_overlay_buffers()
 
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
@@ -299,7 +573,7 @@ class GLNDVolumeWidget(QOpenGLWidget):
         glClearColor(0.04, 0.04, 0.04, 1.0)
         glClear(GL_COLOR_BUFFER_BIT)
 
-        if not self.tex_x or not self.tex_y or not self.tex_tf:
+        if not self.tex_x or not self.tex_y or not self.tex_intensity:
             return
 
         glUseProgram(self.program)
@@ -313,8 +587,8 @@ class GLNDVolumeWidget(QOpenGLWidget):
         glUniform1i(glGetUniformLocation(self.program, "u_feature_y"), 1)
 
         glActiveTexture(GL_TEXTURE2)
-        glBindTexture(GL_TEXTURE_2D, self.tex_tf)
-        glUniform1i(glGetUniformLocation(self.program, "u_tf2d"), 2)
+        glBindTexture(GL_TEXTURE_3D, self.tex_intensity)
+        glUniform1i(glGetUniformLocation(self.program, "u_intensity_volume"), 2)
 
         glUniform1i(glGetUniformLocation(self.program, "u_debug_mode"), self.debug_mode)
         glUniform1i(glGetUniformLocation(self.program, "u_force_red"), 1 if self.force_red else 0)
@@ -325,9 +599,95 @@ class GLNDVolumeWidget(QOpenGLWidget):
         glUniform1f(glGetUniformLocation(self.program, "u_opacity_scale"), self.opacity_scale)
         glUniform1f(glGetUniformLocation(self.program, "u_visibility_boost"), self.visibility_boost)
         glUniform1f(glGetUniformLocation(self.program, "u_sampling_rate"), self.sampling_rate)
+        glUniform1i(glGetUniformLocation(self.program, "u_active_steps"),int(self.active_steps))
 
+        self._upload_widgets_to_shader()
         glBindVertexArray(self.vao)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+        glBindVertexArray(0)
+
+        glUseProgram(0)
+        if self.show_bounding_box or self.show_axes:
+            self._draw_orientation_overlay()
+
+    def _create_overlay_buffers(self):
+        self.overlay_vao = glGenVertexArrays(1)
+        self.overlay_vbo = glGenBuffers(1)
+
+        glBindVertexArray(self.overlay_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+
+        # Reserve space. Dynamic data uploaded every frame.
+        glBufferData(GL_ARRAY_BUFFER, 1024 * 6 * 4, None, GL_DYNAMIC_DRAW)
+
+        stride = 5 * 4  # x, y, r, g, b
+
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
+
+        glEnableVertexAttribArray(1)
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(2 * 4))
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+
+    def _draw_orientation_overlay(self):
+        vertices = []
+
+        def add_line(a, b, color):
+            ax, ay = self._volume_to_screen(a)
+            bx, by = self._volume_to_screen(b)
+
+            r, g, bl = color
+
+            vertices.extend([ax, ay, r, g, bl])
+            vertices.extend([bx, by, r, g, bl])
+
+        if self.show_bounding_box:
+            corners = [
+                (0, 0, 0),
+                (1, 0, 0),
+                (1, 1, 0),
+                (0, 1, 0),
+                (0, 0, 1),
+                (1, 0, 1),
+                (1, 1, 1),
+                (0, 1, 1),
+            ]
+
+            edges = [
+                (0, 1), (1, 2), (2, 3), (3, 0),
+                (4, 5), (5, 6), (6, 7), (7, 4),
+                (0, 4), (1, 5), (2, 6), (3, 7),
+            ]
+
+            for a, b in edges:
+                add_line(corners[a], corners[b], (1.0, 1.0, 1.0))
+
+        if self.show_axes:
+            origin = (0.5, 0.5, 0.5)
+
+            add_line(origin, (1.0, 0.5, 0.5), (1.0, 0.1, 0.1))  # X red
+            add_line(origin, (0.5, 1.0, 0.5), (0.1, 1.0, 0.1))  # Y green
+            add_line(origin, (0.5, 0.5, 1.0), (0.2, 0.4, 1.0))  # Z blue
+
+        if not vertices:
+            return
+
+        data = np.asarray(vertices, dtype=np.float32)
+
+        glDisable(GL_DEPTH_TEST)
+
+        glUseProgram(self.overlay_program)
+
+        glBindVertexArray(self.overlay_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.overlay_vbo)
+        glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_DYNAMIC_DRAW)
+
+        glLineWidth(1.0)
+        glDrawArrays(GL_LINES, 0, len(vertices) // 5)
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
         glBindVertexArray(0)
 
         glUseProgram(0)
@@ -389,8 +749,9 @@ class GLNDVolumeWidget(QOpenGLWidget):
         self.tex_x = self._upload_3d_texture(x_vol, self.feature_x)
         self.tex_y = self._upload_3d_texture(y_vol, self.feature_y)
 
-        tf = build_tf_texture_2d_debug(self.widgets, size=self.tf_texture_size, verbose=False)
-        self.tex_tf = self._upload_2d_texture(tf)
+        intensity = self._normalize(self.all_features["Intensity"], "Intensity")
+        intensity_vol = self._reshape_to_volume(intensity)
+        self.tex_intensity = self._upload_3d_texture(intensity_vol, "Intensity lighting")
 
         print("[GL-ND] Upload complete")
         print("[GL-ND] Keys: 0=true 2D TF, 1=X feature, 2=Y feature, 3=joint color, R=red debug")
@@ -487,13 +848,14 @@ class GLNDVolumeWidget(QOpenGLWidget):
         return tex
 
     def _delete_textures(self):
-        for tex in [self.tex_x, self.tex_y, self.tex_tf]:
+        for tex in [self.tex_x, self.tex_y, self.tex_tf, self.tex_intensity]:
             if tex:
                 glDeleteTextures([tex])
 
         self.tex_x = None
         self.tex_y = None
         self.tex_tf = None
+        self.tex_intensity = None
 
     def _create_quad(self):
         quad = np.array(
@@ -546,3 +908,198 @@ class GLNDVolumeWidget(QOpenGLWidget):
 
         print("[GL-ND] Shader program compiled")
         return program
+
+    def _widget_type_id(self, widget):
+        name = widget.widget_type.value
+
+        if name == "gaussian":
+            return 0
+        if name == "rectangular":
+            return 1
+        if name == "triangular":
+            return 2
+        if name == "ellipsoid":
+            return 3
+        if name == "diamond":
+            return 4
+
+        return 0
+
+
+    def _blend_id(self, widget):
+        blend = getattr(widget, "blend_mode", "max")
+
+        if blend == "max":
+            return 0
+        if blend == "add":
+            return 1
+        if blend == "multiply":
+            return 2
+
+        return 0
+
+
+    def _falloff_id(self, widget):
+        falloff = getattr(widget, "falloff_type", "linear")
+
+        if falloff == "gaussian":
+            return 0
+        if falloff == "linear":
+            return 1
+        if falloff == "constant":
+            return 2
+        if falloff == "power2":
+            return 3
+        if falloff == "power3":
+            return 4
+
+        return 1
+
+
+    def _widget_size_params(self, widget):
+        name = widget.widget_type.value
+
+        if name == "gaussian":
+            sx = getattr(widget, "intensity_std", 20.0)
+            sy = getattr(widget, "gradient_std", 20.0)
+
+        elif name == "rectangular":
+            sx = getattr(widget, "intensity_width", 50.0)
+            sy = getattr(widget, "gradient_height", 50.0)
+
+        elif name == "triangular":
+            sx = getattr(widget, "intensity_width", 50.0)
+            sy = getattr(widget, "gradient_height", 50.0)
+
+        elif name == "ellipsoid":
+            sx = getattr(widget, "intensity_radius", 25.0)
+            sy = getattr(widget, "gradient_radius", 25.0)
+
+        elif name == "diamond":
+            sx = getattr(widget, "intensity_width", 50.0)
+            sy = getattr(widget, "gradient_height", 50.0)
+
+        else:
+            sx = 30.0
+            sy = 30.0
+
+        return float(sx), float(sy)
+
+
+    def _upload_widgets_to_shader(self):
+        max_widgets = 32
+        widgets = self.widgets[:max_widgets]
+
+        glUniform1i(
+            glGetUniformLocation(self.program, "u_num_widgets"),
+            len(widgets)
+        )
+
+        params = np.zeros((max_widgets, 4), dtype=np.float32)
+        colors = np.zeros((max_widgets, 4), dtype=np.float32)
+        types = np.zeros((max_widgets,), dtype=np.int32)
+        blends = np.zeros((max_widgets,), dtype=np.int32)
+        falloffs = np.zeros((max_widgets,), dtype=np.int32)
+
+        for i, widget in enumerate(widgets):
+            sx, sy = self._widget_size_params(widget)
+
+            params[i] = [
+                float(widget.center_intensity),
+                float(widget.center_gradient),
+                sx,
+                sy,
+            ]
+
+            r, g, b = widget.color
+            colors[i] = [
+                float(r),
+                float(g),
+                float(b),
+                float(widget.opacity),
+            ]
+
+            types[i] = self._widget_type_id(widget)
+            blends[i] = self._blend_id(widget)
+            falloffs[i] = self._falloff_id(widget)
+
+        glUniform4fv(
+            glGetUniformLocation(self.program, "u_widget_params"),
+            max_widgets,
+            params
+        )
+
+        glUniform4fv(
+            glGetUniformLocation(self.program, "u_widget_color"),
+            max_widgets,
+            colors
+        )
+
+        glUniform1iv(
+            glGetUniformLocation(self.program, "u_widget_type"),
+            max_widgets,
+            types
+        )
+
+        glUniform1iv(
+            glGetUniformLocation(self.program, "u_widget_blend"),
+            max_widgets,
+            blends
+        )
+
+        glUniform1iv(
+            glGetUniformLocation(self.program, "u_widget_falloff"),
+            max_widgets,
+            falloffs
+        )
+
+    def _volume_to_screen(self, p):
+        """
+        Project volume-space point [0,1]^3 to screen NDC [-1,1]^2
+        using the inverse of the raymarch sampling transform.
+
+        Shader does:
+            local = vec3(screen.x, screen.y, z - 0.5)
+            rotated = R * local
+            pos = rotated + 0.5
+
+        Therefore for overlay:
+            local = inverse(R) * (pos - 0.5)
+            screen = local.xy / zoom
+        """
+        p = np.asarray(p, dtype=np.float32)
+
+        centered = p - np.array([0.5, 0.5, 0.5], dtype=np.float32)
+
+        cx = np.cos(self.rot_x)
+        sx = np.sin(self.rot_x)
+        cy = np.cos(self.rot_y)
+        sy = np.sin(self.rot_y)
+
+        rx = np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, cx, -sx],
+                [0.0, sx, cx],
+            ],
+            dtype=np.float32,
+        )
+
+        ry = np.array(
+            [
+                [cy, 0.0, sy],
+                [0.0, 1.0, 0.0],
+                [-sy, 0.0, cy],
+            ],
+            dtype=np.float32,
+        )
+
+        R = ry @ rx
+
+        # inverse of a pure rotation is transpose
+        local = R.T @ centered
+
+        x_ndc = (local[0] / max(self.zoom, 1e-6)) * 2.0
+        y_ndc = (local[1] / max(self.zoom, 1e-6)) * 2.0
+
+        return [float(x_ndc), float(y_ndc)]

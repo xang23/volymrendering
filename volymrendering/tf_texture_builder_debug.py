@@ -4,66 +4,61 @@ import numpy as np
 def build_tf_texture_2d_debug(widgets, size=256, verbose=False):
     tex = np.zeros((size, size, 4), dtype=np.float32)
 
-    if verbose:
-        print("\n[TF2D] Building true 2D RGBA texture")
-        print(f"[TF2D] Texture size: {size}x{size}")
-        print(f"[TF2D] Widgets: {len(widgets)}")
+    xs = np.linspace(0.0, 255.0, size, dtype=np.float32)
+    ys = np.linspace(0.0, 255.0, size, dtype=np.float32)
 
-    for wi, widget in enumerate(widgets):
-        if verbose:
-            print(
-                f"[TF2D] Widget {wi}: "
-                f"type={widget.widget_type.value}, "
-                f"center=({widget.center_intensity:.1f},{widget.center_gradient:.1f}), "
-                f"opacity={widget.opacity:.2f}, "
-                f"color={widget.color}, "
-                f"blend={widget.blend_mode}"
-            )
+    for yi, y in enumerate(ys):
+        for xi, x in enumerate(xs):
+            out_rgb = np.zeros(3, dtype=np.float32)
+            out_a = 0.0
 
-        color = np.array(widget.color, dtype=np.float32)
+            for widget in widgets:
+                local_a = float(widget.calculate_opacity(x, y))
+                local_a = np.clip(local_a, 0.0, 1.0)
 
-        for y in range(size):
-            for x in range(size):
-                alpha = float(widget.calculate_opacity(x, y))
-                alpha = np.clip(alpha, 0.0, 1.0)
+                if local_a <= 0.0:
+                    continue
 
-                if widget.blend_mode == "add":
-                    old_alpha = tex[y, x, 3]
-                    new_alpha = min(1.0, old_alpha + alpha)
+                local_rgb = np.array(widget.color, dtype=np.float32)
+                blend = getattr(widget, "blend_mode", "max")
 
-                    if new_alpha > 1e-6:
-                        tex[y, x, :3] = (
-                            tex[y, x, :3] * old_alpha + color * alpha
-                        ) / new_alpha
+                # ---- MAX ----
+                if blend == "max":
+                    if local_a > out_a:
+                        out_rgb = local_rgb
+                        out_a = local_a
 
-                    tex[y, x, 3] = new_alpha
+                # ---- ADD ----
+                elif blend == "add":
+                    new_a = min(1.0, out_a + local_a)
 
-                elif widget.blend_mode == "multiply":
-                    old_alpha = tex[y, x, 3]
+                    if new_a > 1e-6:
+                        out_rgb = (
+                            out_rgb * out_a + local_rgb * local_a
+                        ) / new_a
 
-                    # Multiply colors (darkening effect)
-                    tex[y, x, :3] = tex[y, x, :3] * (1.0 - alpha) + (tex[y, x, :3] * color) * alpha
+                    out_a = new_a
 
-                    # Combine alpha conservatively
-                    tex[y, x, 3] = old_alpha * (1.0 - alpha) + alpha
+                # ---- MULTIPLY (match shader mask logic) ----
+                elif blend == "multiply":
+                    # mask accumulation (matches shader idea)
+                    out_a = 1.0 - (1.0 - out_a) * (1.0 - local_a)
 
-                else:  # MAX (default)
-                    if alpha > tex[y, x, 3]:
-                        tex[y, x, :3] = color
-                        tex[y, x, 3] = alpha
+                    # simple mix for color
+                    out_rgb = out_rgb * (1.0 - local_a) + local_rgb * local_a
+
+                else:
+                    # fallback
+                    if local_a > out_a:
+                        out_rgb = local_rgb
+                        out_a = local_a
+
+            tex[yi, xi, :3] = np.clip(out_rgb, 0.0, 1.0)
+            tex[yi, xi, 3] = np.clip(out_a, 0.0, 1.0)
 
     if verbose:
         alpha = tex[:, :, 3]
-
         print("[TF2D] Finished")
         print(f"[TF2D] Alpha min/max: {alpha.min():.4f} / {alpha.max():.4f}")
-        print(
-            f"[TF2D] Non-zero alpha texels > 0.01: "
-            f"{np.sum(alpha > 0.01)} / {size * size}"
-        )
-
-        for px, py in [(64, 64), (128, 128), (192, 192), (64, 192), (192, 64)]:
-            rgba = tex[py, px]
-            print(f"[TF2D] Probe TF({px},{py}) = RGBA {rgba}")
 
     return np.ascontiguousarray(tex)

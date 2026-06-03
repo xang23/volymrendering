@@ -152,23 +152,34 @@ class VolumeApp(QtWidgets.QMainWindow):
         if raw_int_max - raw_int_min == 0:
             self.normalized_scalars = np.zeros_like(arr)
         else:
+            
             self.normalized_scalars = 255.0 * (arr - raw_int_min) / (raw_int_max - raw_int_min)
+            self.normalized_scalars = np.clip(self.normalized_scalars, 0, 255).astype(np.float32)
+            #Clip, new for histogram
 
         # gradient
         try:
-            grad_filter = vtk.vtkImageGradientMagnitude()
-            if reader is not None:
-                grad_filter.SetInputConnection(reader.GetOutputPort())
+            # Use already computed gradient from DatasetLoader
+            gradient = all_features.get("Gradient")
+
+            if gradient is not None:
+                raw_gmin, raw_gmax = gradient.min(), gradient.max()
+                self.gradient_range = (raw_gmin, raw_gmax)
+
+                if raw_gmax - raw_gmin == 0:
+                    self.gradient_normalized = np.zeros_like(gradient)
+                else:
+                    self.gradient_normalized = 255.0 * (gradient - raw_gmin) / (raw_gmax - raw_gmin)
+                    self.gradient_normalized = np.clip(self.gradient_normalized, 0, 255).astype(np.float32)
             else:
-                grad_filter.SetInputData(image_data)
-            grad_filter.Update()
-            g = numpy_support.vtk_to_numpy(grad_filter.GetOutput().GetPointData().GetScalars()).astype(np.float32)
+                self.gradient_normalized = np.zeros_like(self.normalized_scalars)
             raw_gmin, raw_gmax = g.min(), g.max()
             self.gradient_range = (raw_gmin, raw_gmax)
             if raw_gmax - raw_gmin == 0:
                 self.gradient_normalized = np.zeros_like(g)
             else:
                 self.gradient_normalized = 255.0 * (g - raw_gmin) / (raw_gmax - raw_gmin)
+                self.gradient_normalized = np.clip(self.gradient_normalized, 0, 255).astype(np.float32)
         except Exception:
             self.gradient_normalized = np.zeros_like(self.normalized_scalars)
 

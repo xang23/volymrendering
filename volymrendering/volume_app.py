@@ -23,9 +23,44 @@ from transfer_function_2d import TransferFunction2D
 from volume_renderer import VolumeRenderer
 from tf_canvas_widget import TFCanvasWidget
 
+from nd_popup import NDFeaturePopup
+
 import traceback
 import os
 import glob
+
+
+
+def trace_calls(frame, event, arg):
+    if event != "call":
+        return trace_calls
+
+    code = frame.f_code
+    filename = code.co_filename
+
+    # ✅ FILTER ONLY YOUR PROJECT FILES
+    if "volymrendering" not in filename.lower():
+        return trace_calls
+    
+    
+    ignore = {
+        "calculate_opacity",
+        "apply_falloff",
+        "_volume_to_screen",
+        "add_line",
+        "paintGL",
+        "on_motion"
+    }
+
+    if code.co_name in ignore:
+        return trace_calls
+
+
+
+    print(f"[CALL] {code.co_name} -> {os.path.basename(filename)}:{frame.f_lineno}")
+    return trace_calls
+
+
 
 # ===== ADD GLOBAL EXCEPTION HANDLER HERE =====
 def global_exception_handler(exctype, value, tb):
@@ -57,12 +92,14 @@ class VolumeApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('VTK Volume + Dual Transfer Function Comparison')
+        sys.settrace(trace_calls)
         
         # Initialize components
         self.dataset_loader = DatasetLoader(self)
         self.volume_renderer = VolumeRenderer()
         self._tf_change_source = None
         self._active_tf_system = 'point'
+        self._hist_cache = None
         
         # nD features
         self.feature_browser = None
@@ -352,11 +389,34 @@ class VolumeApp(QtWidgets.QMainWindow):
         self.tf1d_widget = TFCanvasWidget(self.plot_canvas, parent=self, label='Reset 1D View')
         self.point_canvas_container.addWidget(self.tf1d_widget)
 
+        
+        print("Unique intensity (sample):", len(np.unique(self.normalized_scalars[:10000])))
+        print("Unique gradient (sample):", len(np.unique(self.gradient_normalized[:10000])))
+        
+        print("\n===== FINAL DEBUG BEFORE HISTOGRAM =====")
+
+        print("Intensity stats:")
+        print("  min/max:", self.normalized_scalars.min(), self.normalized_scalars.max())
+        print("  percentiles:", np.percentile(self.normalized_scalars, [0, 25, 50, 75, 99, 100]))
+
+        print("Gradient stats:")
+        print("  min/max:", self.gradient_normalized.min(), self.gradient_normalized.max())
+        print("  percentiles:", np.percentile(self.gradient_normalized, [0, 25, 50, 75, 99, 100]))
+
+        # 🔥 CRITICAL: check correlation sample
+        print("\nSample pairs (intensity, gradient):")
+        for i in range(10):
+            print(self.normalized_scalars[i], self.gradient_normalized[i])
+
         # 2D TF canvas
         hist2d, _, _ = np.histogram2d(
             self.normalized_scalars, self.gradient_normalized, 
-            bins=(256, 256), range=((0, 255), (0, 255))
+            bins=(256, 256), range=(
+                            (np.min(self.normalized_scalars), np.max(self.normalized_scalars)),
+                            (np.min(self.gradient_normalized), np.max(self.gradient_normalized)))
+
         )
+
         self.tf2d_canvas = TransferFunction2D(
             hist2d, self.intensity_range, self.gradient_range, self.log_checkbox
         )
@@ -385,14 +445,16 @@ class VolumeApp(QtWidgets.QMainWindow):
 
         # Create initial widget
         visible_widget = WidgetFactory.create_widget(
-            WidgetType.GAUSSIAN,
-            center_intensity=30,
-            center_gradient=50,
-            intensity_std=20,
-            gradient_std=30,
-            opacity=0.8,
-            color=(0.8, 0.2, 0.2),
-            blend_mode='max'
+        WidgetType.GAUSSIAN,
+        center_intensity=30,
+        center_gradient=50,
+        intensity_std=50.0 / 6.0,
+        gradient_std=50.0 / 6.0,
+        falloff_type="gaussian",
+        falloff_power=2.0,
+        opacity=0.8,
+        color=(0.8, 0.2, 0.2),
+        blend_mode="max",
         )
 
         if hasattr(self, 'nd_manager'):
@@ -415,6 +477,7 @@ class VolumeApp(QtWidgets.QMainWindow):
 
         print("Dual transfer functions setup complete")
         print("="*50 + "\n")
+
 
     def switch_active_system(self, system_name):
         system_type = self.system_selector.currentData()
@@ -705,6 +768,12 @@ class VolumeApp(QtWidgets.QMainWindow):
 
         self.vtkWidget_point.GetRenderWindow().Render()
         self.vtkWidget_widget.GetRenderWindow().Render()
+        
+        print("\n=== PIPELINE SNAPSHOT ===")
+        print("Scalars:", np_scalars.shape)
+        print("Gradient:", all_features["Gradient"].shape)
+        print("Features:", list(all_features.keys()))
+
 
         return True
 
@@ -715,7 +784,10 @@ class VolumeApp(QtWidgets.QMainWindow):
         if hasattr(self, 'tf2d_canvas'):
             hist2d, _, _ = np.histogram2d(
                 self.normalized_scalars, self.gradient_normalized, 
-                bins=(256, 256), range=((0, 255), (0, 255))
+                bins=(256, 256), range=(
+                                (self.normalized_scalars.min(), self.normalized_scalars.max()),
+                                (self.gradient_normalized.min(), self.gradient_normalized.max())
+                                )
             )
             self.tf2d_canvas.raw = hist2d
             if self.log_checkbox.isChecked():
@@ -769,6 +841,18 @@ class VolumeApp(QtWidgets.QMainWindow):
             )
         else:
             print("Widget TF saving not yet implemented")
+        #def save_transfer_function(self, filename):
+    #data = {
+     #   "tf_1d": self.volume_renderer.get_tf_points(),  # existing VTK TF
+     #   "tf_2d_widgets": [w.__dict__ for w in self.tf_canvas.widgets],
+      #  "tf_nd_widgets": [w.__dict__ for w in self.nd_manager.widgets],
+    #}
+
+    #import json
+    #with open(filename, "w") as f:
+    #    json.dump(data, f, indent=2)
+
+    #print(f"Saved TF to {filename}")
 
     def load_selected_tf(self, idx):
         tf_data = self.tf_manager.load_selected_tf(idx, current_data_range=self.intensity_range)
@@ -919,8 +1003,50 @@ class VolumeApp(QtWidgets.QMainWindow):
                 data_x = feature_data[feat_y]
                 data_y = feature_data[feat_x]
                 # ============================
+               # Sync current 2D widget TF into nD manager before opening popup.
+                # Only add widgets that do not already correspond to an existing nD widget.
+                if hasattr(self, "tf_canvas") and hasattr(self, "nd_manager"):
+                    synced = 0
 
-                from nd_popup import NDFeaturePopup
+                    existing_refs = set(id(w) for w in self.nd_manager.widgets)
+
+                    for widget in self.tf_canvas.widgets:
+                        # If this widget is already a projection of an nD widget, do not re-add it.
+                        ref = getattr(widget, "nd_ref", None)
+
+                        if ref is not None and ref is not True:
+                            if id(ref) in existing_refs:
+                                continue
+                            canonical_widget = ref
+                        else:
+                            canonical_widget = widget
+
+                        if id(canonical_widget) in existing_refs:
+                            continue
+
+                        if not hasattr(canonical_widget, "nd_coords"):
+                            canonical_widget.nd_coords = {}
+
+                        if not hasattr(canonical_widget, "nd_scales"):
+                            canonical_widget.nd_scales = {}
+
+                        canonical_widget.nd_ref = canonical_widget
+
+                        canonical_widget.nd_coords.setdefault("Intensity", canonical_widget.center_intensity)
+                        canonical_widget.nd_coords.setdefault("Gradient", canonical_widget.center_gradient)
+
+                        if hasattr(canonical_widget, "intensity_std"):
+                            canonical_widget.nd_scales.setdefault("Intensity", canonical_widget.intensity_std)
+
+                        if hasattr(canonical_widget, "gradient_std"):
+                            canonical_widget.nd_scales.setdefault("Gradient", canonical_widget.gradient_std)
+
+                        self.nd_manager.add_widget(canonical_widget)
+                        existing_refs.add(id(canonical_widget))
+                        synced += 1
+
+                    print(f"Synced {synced} new 2D widgets into nD manager")
+               
                 print(f"🔧 Creating popup for {array_x} vs {array_y}")
                 popup = NDFeaturePopup(
                     feat_y,  # Color feature (first in 2D TF)
